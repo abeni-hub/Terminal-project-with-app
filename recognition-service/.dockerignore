@@ -1,0 +1,7 @@
+venv
+__pycache__
+*.pyc
+.git
+uploads
+output_detected.jpg
+car_image.jpg

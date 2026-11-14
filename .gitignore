@@ -1,0 +1,91 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Large archives and temporary backups
+*.zip
+*.tar.gz
+*.tgz
+*.rar
+
+# Next.js
+.next/
+**/.next/
+
+# Python
+venv/
+**/venv/
+.venv/
+**/__pycache__/
+*.pyc
+
+# Uploads & Media
+recognition-service/uploads/
+**/uploads/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Expo
+.expo/
+.expo-shared/
+dist/
+web-build/
+
+# React Native
+*.jks
+*.keystore
+
+# Build outputs
+build/
+dist/
+coverage/
+out/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Bolt
+.bolt/
+.bolts/
+bolt.db
+bolt.sqlite
+
+# Docker
+docker-data/
+
+# Cache
+.cache/
+.parcel-cache/
+.eslintcache
+.tmp/
+temp/
+
+# TypeScript
+*.tsbuildinfo
+
+# Firebase
+.firebase/
+
+# Local database files
+*.sqlite
+*.db
+
+# Misc
+*.swp
+*.swo

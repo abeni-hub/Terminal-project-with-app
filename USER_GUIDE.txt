@@ -1,0 +1,356 @@
+================================================================================
+  TRANSPORT TERMINAL MANAGEMENT & ANPR WEEKLY ROSTER SYSTEM
+  COMPLETE USER & OPERATOR GUIDE
+================================================================================
+
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. System Overview & Core Concept
+2. How to Start & Run the Application
+3. User Roles & Login Credentials
+4. Step-by-Step Operational Workflows
+   4.1 Workflow A: Weekly Route Planning & Roster Lifecycle
+   4.2 Workflow B: Vehicle Arrival & Automated Entry ANPR
+   4.3 Workflow C: Loading Yard & Dispatch In
+   4.4 Workflow D: Exit Gate Detection, Fee Collection & Dispatch Out
+   4.5 Workflow E: Resolving Gate Violations & Wrong-Terminal Overrides
+   4.6 Workflow F: 360° Vehicle History & Audit Timeline
+   4.7 Workflow G: Generating Operations & Financial Reports
+   4.8 Workflow H: Managing ANPR Cameras & Gate Devices
+5. Key Pages & URL Sitemap
+6. API & Real-time WebSocket Reference
+7. Troubleshooting & Frequently Asked Questions
+
+================================================================================
+1. SYSTEM OVERVIEW & CORE CONCEPT
+================================================================================
+
+This system is an ANPR-Powered Transport Terminal Entry, Dispatch, Exit,
+Fee, Violation, and Weekly Assignment Management System designed specifically
+for public and commercial transport operations (buses, minibuses, coasters).
+
+IMPORTANT: This is NOT a parking system.
+
+Vehicles operate on WEEKLY ROSTER ASSIGNMENTS:
+- Vehicles belong to Vehicle Groups (e.g., Group A, Group B).
+- Every week, Vehicle Groups are assigned to specific terminal-to-terminal routes.
+- When a vehicle arrives at a terminal gate, an ANPR camera scans its plate.
+- The system verifies whether the vehicle is authorized to operate from that
+  terminal during the current week.
+- If VALID: Admitted into the loading yard queue.
+- If INVALID: Flagged as a violation; supervisor review is required.
+- Loading: Dispatcher confirms passenger boarding ("Dispatch In").
+- Departure: Exit ANPR detects vehicle, fee is collected, and dispatcher confirms
+  "Dispatch Out", closing the trip record with an authoritative audit code.
+
+================================================================================
+2. HOW TO START & RUN THE APPLICATION
+================================================================================
+
+Prerequisites:
+- Node.js (v18 or higher)
+- PostgreSQL Database running locally or in Docker (default port: 5432)
+- Python 3.9+ (optional, for the recognition microservice)
+
+STEP 1: Start PostgreSQL Database
+--------------------------------------------------------------------------------
+Make sure PostgreSQL is running and your database URL is set in backend/.env:
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/transport_terminal?schema=public"
+
+STEP 2: Start the NestJS Backend
+--------------------------------------------------------------------------------
+Open a terminal and run:
+  cd backend
+  npm install
+  npx prisma generate
+  npx prisma db push
+  npm run seed           (seeds default terminals, vehicles, and Week 38 roster)
+  npm run start:dev
+
+The backend will start at: http://localhost:4000
+API Documentation (Swagger): http://localhost:4000/api/docs
+Socket.IO WebSocket: http://localhost:4000
+
+STEP 3: Start the Next.js Frontend
+--------------------------------------------------------------------------------
+Open a second terminal and run:
+  cd project
+  npm install
+  npm run dev
+
+The web application will start at: http://localhost:3000
+
+STEP 4: (Optional) Start Python Recognition Microservice
+--------------------------------------------------------------------------------
+Open a third terminal and run:
+  cd recognition-service
+  pip install -r requirements.txt
+  uvicorn app.main:app --reload --port 8000
+
+================================================================================
+3. USER ROLES & LOGIN CREDENTIALS
+================================================================================
+
+The seed script creates pre-configured operational accounts for testing:
+
++---------------------+-------------------------------+----------------------+-------------------------------------------------------+
+| Role                | Email                         | Password             | Primary Responsibilities                              |
++---------------------+-------------------------------+----------------------+-------------------------------------------------------+
+| Super Admin         | admin@terminal.gov.et         | Admin@1234           | Full system management, settings, user RBAC           |
+| Municipal Planner   | planner@terminal.gov.et       | Planner@1234         | Weekly roster scheduling, auto-generation, locking    |
+| Mercato Dispatcher  | dispatcher.mercato@terminal.et| Dispatcher@1234      | Live gate check-in, dispatch in/out, fee collection   |
+| Bole Dispatcher     | dispatcher.bole@terminal.et   | Dispatcher@1234      | Terminal operations at Bole terminal                  |
+| Piassa Dispatcher   | dispatcher.piassa@terminal.et | Dispatcher@1234      | Terminal operations at Piassa terminal                |
++---------------------+-------------------------------+----------------------+-------------------------------------------------------+
+
+================================================================================
+4. STEP-BY-STEP OPERATIONAL WORKFLOWS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 WORKFLOW A: WEEKLY ROUTE PLANNING & ROSTER LIFECYCLE
+--------------------------------------------------------------------------------
+Role: Municipal Planner or Super Admin
+Page: /rosters
+
+Lifecycle Stages:
+  [DRAFT] -> [REVIEWED] -> [PUBLISHED] -> [LOCKED] -> [ARCHIVED]
+
+Steps:
+1. Navigate to "Weekly Rosters" (/rosters).
+2. Click "+ New Assignment" or "Auto-Generate Schedule".
+3. If Auto-Generating:
+   - Enter Week Number (e.g. 38).
+   - Click "Generate Preview". The system automatically distributes vehicle
+     groups round-robin across active routes without scheduling conflicts.
+   - Click "Approve & Save as Draft".
+4. Review the roster details:
+   - Click "Review" on a draft assignment.
+   - Confirm origin/destination terminals and assigned dispatchers.
+5. Click "Publish":
+   - The roster becomes active for terminal entry gates.
+   - Entry ANPR cameras will now recognize vehicles belonging to this group.
+6. Click "Lock Roster":
+   - Freezes the roster into the authoritative operational record.
+   - Ordinary edits are blocked; any vehicle arriving at an unassigned terminal
+     will trigger an automated gate violation alert.
+
+--------------------------------------------------------------------------------
+4.2 WORKFLOW B: VEHICLE ARRIVAL & AUTOMATED ENTRY ANPR
+--------------------------------------------------------------------------------
+Actor: ANPR Camera / System
+Page: /queue (Live Dispatcher Console) or /recognition/dashboard
+
+Steps:
+1. A vehicle (e.g., plate "2-A12345") approaches the Terminal Entry Gate.
+2. The Entry ANPR camera captures the license plate image and runs OCR.
+3. The system checks:
+   a) Deduplication: Has this vehicle already been scanned in the last 5 min?
+   b) Active Roster: Is the vehicle's group assigned to a route connecting to
+      this terminal in the current week?
+4. Match Outcomes:
+   - ASSIGNED: Vehicle is placed in the terminal queue with status "WAITING"
+     (or "PENDING_IN"). A real-time notification sounds on the dispatcher's screen.
+   - WRONG TERMINAL / UNASSIGNED: System creates a Violation Record and places
+     the vehicle in the "Violations Review" queue tab.
+5. Manual Fallback: If a camera is offline, the dispatcher clicks "Manual Check-In",
+   types the plate number, and selects the route.
+
+--------------------------------------------------------------------------------
+4.3 WORKFLOW C: LOADING YARD & DISPATCH IN
+--------------------------------------------------------------------------------
+Role: Dispatcher
+Page: /queue (Tab: "Incoming / Pending In" or "Loading Yard")
+
+Steps:
+1. Open the Live Dispatcher Console (/queue).
+2. On the "Incoming (Pending In)" tab, locate the arriving vehicle.
+3. Click "Dispatch In":
+   - A modal opens showing Vehicle Plate, Model, Capacity, and Route.
+   - (Optional) Enter Berth/Bay Number or notes.
+   - Click "Confirm Dispatch In".
+4. The vehicle transitions to "LOADING" status and moves to the "Loading Yard" tab.
+5. Passengers board the vehicle in the terminal yard.
+
+--------------------------------------------------------------------------------
+4.4 WORKFLOW D: EXIT GATE DETECTION, FEE COLLECTION & DISPATCH OUT
+--------------------------------------------------------------------------------
+Role: Dispatcher
+Page: /queue (Tab: "Exit Gate / Pending Out" or "Loading Yard")
+
+Steps:
+1. Once fully loaded, the vehicle drives toward the Exit Gate.
+2. The Exit ANPR camera scans the plate and automatically flags the vehicle
+   as "DETECTED_AT_EXIT" in the "Exit Gate / Pending Out" tab.
+3. The dispatcher clicks "Confirm & Exit" (or "Dispatch Out"):
+   - Modal displays the applicable Terminal Dispatch Fee (e.g., 25.00 ETB).
+   - Select Payment Method: CBE Birr, Telebirr, Cash, or Electronic Transfer.
+   - Enter Payment Reference / Transaction ID (e.g., "TXN-98234").
+   - Click "Confirm Payment & Dispatch Out".
+4. The gate barrier opens.
+5. An authoritative Dispatch Record is created with:
+   - Unique Audit Reference (e.g., "AUD-1042")
+   - Turnaround timestamps (Entry Time, Dispatch In Time, Dispatch Out Time)
+   - Fee Collector ID and Dispatcher Name
+6. The trip is closed and logged into the audit trail.
+
+--------------------------------------------------------------------------------
+4.5 WORKFLOW E: RESOLVING GATE VIOLATIONS & OVERRIDES
+--------------------------------------------------------------------------------
+Role: Terminal Supervisor / Dispatcher
+Page: /violations or /queue (Tab: "Violations Review")
+
+Scenarios:
+- Vehicle arrived at Mercato Terminal, but weekly roster assigned it to Bole.
+- Vehicle is not assigned to any route this week.
+
+Steps to Resolve:
+1. Go to "Gate Violations" (/violations) or /queue -> "Violations Review".
+2. Click "Review & Resolve" next to the flagged vehicle.
+3. Review the context card:
+   - Plate Number and Detected Gate
+   - Current Terminal vs Assigned Terminal & Route
+   - Optical Recognition Confidence & Timestamp
+4. Choose an Operational Action:
+   - ACTION 1: "Allow Dispatch In" (Admit to Yard)
+     Use when there is an operational emergency, route surge, or authorized transfer.
+     -> Enter Mandatory Supervisor Remark (e.g., "Authorized by Head Dispatcher for passenger surge").
+     -> Click "Confirm & Admit Vehicle".
+     -> Vehicle is moved into the Loading Yard queue with an audited override mark.
+   - ACTION 2: "Turn Away / Reject Entry"
+     -> Enter Remark (e.g., "Vehicle redirected to assigned terminal Piassa").
+     -> Click "Confirm Rejection".
+     -> Vehicle is turned away at the gate.
+
+--------------------------------------------------------------------------------
+4.6 WORKFLOW F: 360° VEHICLE HISTORY & AUDIT TIMELINE
+--------------------------------------------------------------------------------
+Role: Any User / Auditor
+Page: /vehicles or /vehicles/[id]
+
+Steps:
+1. Go to "Vehicles" (/vehicles).
+2. Click on any Plate Number or click the "History" button.
+3. The 360° History Modal (or dynamic page) opens with 5 distinct tabs:
+   - Tab 1 [Dispatches & Trips]: Complete record of completed departures, routes,
+     turnaround duration, fee amounts, and payment references.
+   - Tab 2 [Weekly Assignments]: History of weekly roster allocations.
+   - Tab 3 [Terminal Entries]: Gate arrival logs with ANPR confidence scores.
+   - Tab 4 [Violations]: Incidents, severity, and resolution remarks.
+   - Tab 5 [ANPR Scans]: OCR optical captures and camera gate timestamps.
+
+--------------------------------------------------------------------------------
+4.7 WORKFLOW G: GENERATING OPERATIONS & FINANCIAL REPORTS
+--------------------------------------------------------------------------------
+Role: Municipal Planner, Auditor, Super Admin
+Page: /reports
+
+Steps:
+1. Go to "Terminal Operations & Revenue Reports" (/reports).
+2. Select Terminal Filter (All Terminals or specific terminal like Mercato).
+3. Choose a Tab:
+   - "Dispatches & Trips": Daily/weekly volume, routes, dispatcher breakdown.
+   - "Revenue & Collections": Total fees assessed, paid vs pending collections.
+   - "Roster Compliance": Wrong-terminal percentage, adherence rates.
+4. Exporting Data:
+   - Click "Export CSV" to immediately download a standard CSV spreadsheet.
+   - Click "Export JSON" to download structured data for external BI tools.
+
+--------------------------------------------------------------------------------
+4.8 WORKFLOW H: MANAGING ANPR CAMERAS & GATE DEVICES
+--------------------------------------------------------------------------------
+Role: Super Admin / IT Specialist
+Page: /cameras
+
+Steps:
+1. Go to "ANPR Camera & Gate Devices" (/cameras).
+2. View cameras grouped into:
+   - ENTRY GATES (Inbound ANPR)
+   - EXIT GATES (Outbound ANPR)
+3. Operations:
+   - Click "Test" icon to check stream connection latency (e.g., RTSP / USB / Video).
+   - Click "ALPR Engine" button to toggle automatic plate recognition On/Off.
+   - Click "Register Camera" (/cameras/new) to add new gate sensors.
+
+================================================================================
+5. KEY PAGES & URL SITEMAP
+================================================================================
+
++----------------------------+-------------------------------------------------------+
+| URL Path                   | Page Purpose                                          |
++----------------------------+-------------------------------------------------------+
+| /queue                     | Live Dispatcher Console with 6 operational tabs       |
+| /rosters                   | Weekly Roster Planning, Conflict Check & Locking      |
+| /violations                | Gate Violations Review & Supervisor Overrides         |
+| /vehicles                  | Vehicle Fleet Registry & 360° History Entrypoint      |
+| /vehicles/[id]             | Dedicated 360° Vehicle Operational Audit Profile      |
+| /reports                   | Operational KPIs, Revenue Collections & CSV Exports   |
+| /cameras                   | Entry/Exit ANPR Hardware & Stream Monitoring          |
+| /terminals                 | Terminal Facilities & Berth Configuration             |
+| /routes                    | Inter-Terminal Route Network & Distances              |
+| /vehicle-groups            | Group Management for Weekly Allocation                |
+| /dispatch-fees             | Vehicle Type Tariff & Fee Rule Configuration          |
+| /audit-logs                | Immutable System Security & Action Audit Trail        |
++----------------------------+-------------------------------------------------------+
+
+================================================================================
+6. API & REAL-TIME WEBSOCKET REFERENCE
+================================================================================
+
+Backend Base URL: http://localhost:4000/api
+WebSocket Server: http://localhost:4000 (Socket.IO)
+
+Key REST Endpoints:
+- POST /api/v1/recognition/process
+  Receives camera plate reads and applies deduplication & roster validation.
+- POST /api/queue/dispatch-in
+  Payload: { queueEntryId, dispatcherId, remark }
+- POST /api/queue/dispatch-out
+  Payload: { queueEntryId, dispatcherId, paymentReference, feeAmount }
+- POST /api/queue/resolve-violation
+  Payload: { queueEntryId, action: 'DISPATCH_IN' | 'REJECT', remark, dispatcherId }
+- GET /api/vehicles/:idOrPlate/history
+  Returns complete 360° history across dispatches, rosters, entries, violations.
+- POST /api/assignments/:id/lock
+  Locks weekly roster against further modification.
+
+WebSocket Real-time Events:
+- "recognition:detected"  -> Fired on every valid gate scan.
+- "recognition:violation" -> Fired on wrong-terminal or unassigned vehicles.
+- "queue:updated"         -> Fired when vehicles enter, load, or depart.
+- "queue:exit_detected"   -> Fired when vehicle arrives at exit gate camera.
+
+================================================================================
+7. TROUBLESHOOTING & FREQUENTLY ASKED QUESTIONS
+================================================================================
+
+Q1: Why is a vehicle showing "WRONG TERMINAL ENTRY" when it arrives?
+A: Check /rosters for the current week. If the vehicle's group is assigned to a
+   route between Terminals A and B, but it arrived at Terminal C, the system
+   strictly flags it. A supervisor can approve admission under /violations using
+   "Allow Dispatch In" with a mandatory remark.
+
+Q2: How do I test ANPR detections without physical IP cameras?
+A: You can use the built-in Camera Simulator (/recognition/history or /cameras)
+   or make a direct HTTP POST to /api/v1/recognition/process:
+   {
+     "cameraId": "cam-mercato-in-1",
+     "terminalId": "term-mercato",
+     "plateNumber": "2-A12345",
+     "confidence": 0.94,
+     "cameraType": "ENTRY"
+   }
+
+Q3: Can a locked weekly roster be modified?
+A: Once a roster is LOCKED, direct edits are frozen to protect operational
+   integrity. To change vehicle routes, create an administrative override or
+   publish an amended assignment.
+
+Q4: What happens if the internet or camera stream disconnects?
+A: Dispatchers can use the "Manual Check-In" button on the /queue page to enter
+   vehicles into the queue manually. All manual entries are explicitly tagged
+   with the dispatcher's username for audit transparency.
+
+================================================================================
+END OF GUIDE
+================================================================================

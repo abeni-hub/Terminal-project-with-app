@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transport Terminal Management & ANPR System - Workflow & Roles Guide</title>
+  <style>
+    @media print {
+      body { font-size: 11pt; }
+      .no-print { display: none; }
+      .page-break { page-break-before: always; }
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.6;
+      color: #1e293b;
+      max-width: 960px;
+      margin: 40px auto;
+      padding: 0 24px;
+      background-color: #f8fafc;
+    }
+    .card {
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 36px 44px;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -2px rgba(0, 0, 0, 0.05);
+    }
+    h1 {
+      color: #0f172a;
+      font-size: 26px;
+      font-weight: 800;
+      border-bottom: 2px solid #2563eb;
+      padding-bottom: 12px;
+      margin-top: 0;
+    }
+    h2 {
+      color: #1e3a8a;
+      font-size: 20px;
+      margin-top: 32px;
+      border-bottom: 1px solid #e2e8f0;
+      padding-bottom: 6px;
+    }
+    h3 {
+      color: #2563eb;
+      font-size: 16px;
+      margin-top: 24px;
+    }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 6px;
+      margin-right: 8px;
+    }
+    .badge-admin { background-color: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+    .badge-planner { background-color: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+    .badge-dispatcher { background-color: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+    .callout {
+      background-color: #eff6ff;
+      border-left: 4px solid #2563eb;
+      padding: 16px 20px;
+      border-radius: 6px;
+      margin: 20px 0;
+      font-size: 14.5px;
+    }
+    .step-list {
+      list-style-type: none;
+      padding-left: 0;
+    }
+    .step-item {
+      position: relative;
+      padding: 12px 16px 12px 48px;
+      margin-bottom: 12px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+    }
+    .step-number {
+      position: absolute;
+      left: 14px;
+      top: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
+      background-color: #2563eb;
+      color: white;
+      font-size: 12px;
+      font-weight: bold;
+      border-radius: 50%;
+    }
+    .step-title {
+      font-weight: 700;
+      color: #0f172a;
+      margin-bottom: 4px;
+    }
+    .step-desc {
+      font-size: 14px;
+      color: #475569;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 24px 0;
+      font-size: 13.5px;
+    }
+    th, td {
+      border: 1px solid #cbd5e1;
+      padding: 10px 14px;
+      text-align: left;
+    }
+    th {
+      background-color: #1e3a8a;
+      color: #ffffff;
+      font-weight: 600;
+    }
+    tr:nth-child(even) {
+      background-color: #f8fafc;
+    }
+    .btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background-color: #2563eb;
+      color: white;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .btn:hover { background-color: #1d4ed8; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px;">
+      <div>
+        <h1>Transport Terminal Management & ANPR System</h1>
+        <p style="color: #64748b; font-size: 15px; margin-top: -6px;">
+          Standard Operating Procedure (SOP) & Role Responsibilities Guide
+        </p>
+      </div>
+      <button class="no-print btn" onclick="window.print()">🖨️ Print / Save as PDF</button>
+    </div>
+
+    <div class="callout">
+      <strong>Core Principle:</strong> This system is <strong>NOT</strong> a parking management tool. Vehicles operate under <strong>Weekly Roster Assignments</strong>. ANPR cameras detect arriving and departing vehicles to automate queue entry, manage FIFO yard loading, calculate turnaround duration, collect dispatch fees, and prevent unauthorized terminal operations.
+    </div>
+
+    <h2>1. End-to-End Operational Lifecycle (Chronological Order)</h2>
+    <div class="step-list">
+      <div class="step-item">
+        <div class="step-number">1</div>
+        <div class="step-title">Master Data & Hardware Setup (System Admin)</div>
+        <div class="step-desc">Terminals, routes, vehicle fleets, user RBAC, dispatch fee tariffs, and ANPR cameras are configured in the system.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">2</div>
+        <div class="step-title">Weekly Route Scheduling (Municipal Planner)</div>
+        <div class="step-desc">Rosters are auto-generated round-robin, conflicts are resolved, dispatchers are assigned, and the schedule is published and locked.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">3</div>
+        <div class="step-title">Terminal Gate Entry & Verification (ANPR / Dispatcher)</div>
+        <div class="step-desc">Entry ANPR camera scans arriving plate. If authorized on the active weekly roster, vehicle enters FIFO queue as <code>WAITING</code>. If wrong terminal, marked as <code>VIOLATION</code>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">4</div>
+        <div class="step-title">Dispatch In & Yard Boarding (Dispatcher)</div>
+        <div class="step-desc">Dispatcher confirms vehicle arrival into the loading bay (<code>LOADING</code>). Passengers board the vehicle.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">5</div>
+        <div class="step-title">Exit Gate Scan, Fee Collection & Dispatch Out (ANPR / Dispatcher)</div>
+        <div class="step-desc">Exit ANPR detects vehicle (<code>DETECTED_AT_EXIT</code>). Dispatcher collects the dispatch fee (Telebirr/CBE Birr/Cash), inputs receipt reference, confirms departure, barrier opens, and status changes to <code>ON_ROUTE</code>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">6</div>
+        <div class="step-title">Auditing & Analytics (System Admin / Planner)</div>
+        <div class="step-desc">Every transaction is stamped with an immutable audit reference (<code>AUD-XXXX</code>). Performance and financial reports are generated.</div>
+      </div>
+    </div>
+
+    <h2>2. Detailed Role Responsibilities (In Order of Action)</h2>
+
+    <h3><span class="badge badge-admin">ROLE 1</span> System Administrator (Super Admin)</h3>
+    <p><em>Focus: System governance, infrastructure configuration, security, user access, and tariff rules.</em></p>
+    <div class="step-list">
+      <div class="step-item">
+        <div class="step-number">1</div>
+        <div class="step-title">User & Access Management (<code>/users</code>, <code>/roles</code>)</div>
+        <div class="step-desc">Create user accounts (Planners, Dispatchers, Supervisors), assign users to their designated physical terminals, and configure permissions.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">2</div>
+        <div class="step-title">Terminal & Route Setup (<code>/terminals</code>, <code>/routes</code>)</div>
+        <div class="step-desc">Register physical terminals (GPS coordinates, bay capacity, operational status) and create inter-terminal routes (distance, estimated transit time).</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">3</div>
+        <div class="step-title">Fleet & Group Setup (<code>/vehicle-groups</code>, <code>/vehicles</code>)</div>
+        <div class="step-desc">Group vehicles into operational clusters (Group A, Group B) and register fleet vehicles with license plates, models, and seating capacity.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">4</div>
+        <div class="step-title">ANPR Hardware & Device Onboarding (<code>/cameras</code>, <code>/devices</code>)</div>
+        <div class="step-desc">Configure Entry and Exit gate ANPR cameras (RTSP URLs, IP addresses, OCR confidence thresholds) and approve handheld mobile devices.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">5</div>
+        <div class="step-title">Fee Tariffs & Policies (<code>/dispatch-fees</code>, <code>/settings</code>)</div>
+        <div class="step-desc">Define departure dispatch fee rules by vehicle type (e.g., Minibus = 25 ETB, Coaster = 50 ETB, Bus = 75 ETB) and configure system parameters.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">6</div>
+        <div class="step-title">Overrides & Audit Logs (<code>/overrides</code>, <code>/audit-logs</code>)</div>
+        <div class="step-desc">Review emergency override requests using Supervisor PIN and inspect immutable audit trails.</div>
+      </div>
+    </div>
+
+    <div class="page-break"></div>
+
+    <h3><span class="badge badge-planner">ROLE 2</span> Municipal Planner</h3>
+    <p><em>Focus: Strategic scheduling, weekly roster lifecycle, fleet distribution, and capacity planning.</em></p>
+    <div class="step-list">
+      <div class="step-item">
+        <div class="step-number">1</div>
+        <div class="step-title">Demand & Performance Analysis (<code>/dashboard</code>, <code>/reports</code>)</div>
+        <div class="step-desc">Inspect historical route passenger demand, peak gate hours, and vehicle group utilization.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">2</div>
+        <div class="step-title">Auto-Generate / Create Weekly Roster (<code>/rosters</code>)</div>
+        <div class="step-desc">Select operating week (e.g. Week 38) and click 'Auto-Generate Schedule' to pair vehicle groups with active routes round-robin with automatic conflict prevention.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">3</div>
+        <div class="step-title">Review & Dispatcher Validation (<code>/rosters</code>)</div>
+        <div class="step-desc">Review draft assignments and verify assigned dispatchers belong to origin or destination terminals. Status: <code>[DRAFT]</code> &rarr; <code>[REVIEWED]</code>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">4</div>
+        <div class="step-title">Publish Weekly Roster (<code>/rosters</code>)</div>
+        <div class="step-desc">Publish schedule (<code>[PUBLISHED]</code>). Gate ANPR cameras immediately begin recognizing vehicles belonging to scheduled groups.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">5</div>
+        <div class="step-title">Lock Authoritative Roster (<code>/rosters</code>)</div>
+        <div class="step-desc">Freeze roster into official record (<code>[LOCKED]</code>). Edits are blocked; unassigned vehicle arrivals trigger automated gate violations.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">6</div>
+        <div class="step-title">Archive Completed Rosters (<code>/rosters</code>)</div>
+        <div class="step-desc">Archive completed rosters (<code>[ARCHIVED]</code>) at the end of the operating week.</div>
+      </div>
+    </div>
+
+    <h3><span class="badge badge-dispatcher">ROLE 3</span> Terminal Dispatcher (Live Operations)</h3>
+    <p><em>Focus: Live gate execution, check-in, queue sequencing, passenger boarding, fee collection, and gate barrier control.</em></p>
+    <div class="step-list">
+      <div class="step-item">
+        <div class="step-number">1</div>
+        <div class="step-title">Monitor Live Console & Recognition Feed (<code>/queue</code>, <code>/recognition/dashboard</code>)</div>
+        <div class="step-desc">Open the real-time FIFO queue console for their assigned terminal. Monitor optical recognition scans and audio alerts.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">2</div>
+        <div class="step-title">Vehicle Arrival Verification (<code>/queue</code> &rarr; 'Incoming / Pending In')</div>
+        <div class="step-desc">ANPR scans plate. If assigned on weekly roster, enters FIFO queue as <code>WAITING</code>. If camera is offline, dispatcher uses 'Manual Check-In'.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">3</div>
+        <div class="step-title">Dispatch In &rarr; Loading Yard (<code>/queue</code> &rarr; 'Loading Yard')</div>
+        <div class="step-desc">When vehicle enters the loading bay, dispatcher clicks 'Dispatch In'. State changes to <code>LOADING</code> while passengers board.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">4</div>
+        <div class="step-title">Exit Gate ANPR Detection (<code>/queue</code> &rarr; 'Exit Gate / Pending Out')</div>
+        <div class="step-desc">Loaded vehicle drives to exit gate. Exit ANPR camera scans plate and automatically flags vehicle as <code>DETECTED_AT_EXIT</code>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">5</div>
+        <div class="step-title">Fee Collection & Dispatch Out (<code>/queue</code>)</div>
+        <div class="step-desc">Dispatcher verifies fee (e.g. 25 ETB), selects payment method (Telebirr, CBE Birr, Cash, Electronic), inputs Transaction ID, and confirms. Gate opens and vehicle state becomes <code>ON_ROUTE</code>.</div>
+      </div>
+      <div class="step-item">
+        <div class="step-number">6</div>
+        <div class="step-title">Resolve Gate Violations (<code>/violations</code> or <code>/queue</code> &rarr; 'Violations Review')</div>
+        <div class="step-desc">Evaluate unassigned or wrong-terminal vehicles: (A) Admit / Override with supervisor remark, or (B) Turn Away / Reject.</div>
+      </div>
+    </div>
+
+    <h2>3. Responsibility & Permissions Matrix</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>System Feature / Domain</th>
+          <th>System Admin</th>
+          <th>Municipal Planner</th>
+          <th>Terminal Dispatcher</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>User & Role Management (RBAC)</strong></td>
+          <td>✅ Full Access</td>
+          <td>❌ No Access</td>
+          <td>❌ No Access</td>
+        </tr>
+        <tr>
+          <td><strong>Terminal & Route Configuration</strong></td>
+          <td>✅ Full Access</td>
+          <td>👁️ View Only</td>
+          <td>❌ No Access</td>
+        </tr>
+        <tr>
+          <td><strong>Fleet & Vehicle Group Setup</strong></td>
+          <td>✅ Full Access</td>
+          <td>✅ Can Manage</td>
+          <td>👁️ View Only</td>
+        </tr>
+        <tr>
+          <td><strong>ANPR Camera & Device Setup</strong></td>
+          <td>✅ Full Access</td>
+          <td>❌ No Access</td>
+          <td>❌ No Access</td>
+        </tr>
+        <tr>
+          <td><strong>Weekly Roster Lifecycle (Draft &rarr; Lock)</strong></td>
+          <td>✅ Full Access</td>
+          <td>✅ Primary Owner</td>
+          <td>👁️ View Only</td>
+        </tr>
+        <tr>
+          <td><strong>Live Gate Check-In & Queue</strong></td>
+          <td>✅ Full Access</td>
+          <td>👁️ View Only</td>
+          <td>✅ Primary Operator</td>
+        </tr>
+        <tr>
+          <td><strong>Dispatch In (Yard Loading)</strong></td>
+          <td>✅ Full Access</td>
+          <td>❌ No Access</td>
+          <td>✅ Primary Operator</td>
+        </tr>
+        <tr>
+          <td><strong>Fee Collection & Dispatch Out</strong></td>
+          <td>✅ Full Access</td>
+          <td>❌ No Access</td>
+          <td>✅ Primary Operator</td>
+        </tr>
+        <tr>
+          <td><strong>Gate Violations & Overrides</strong></td>
+          <td>✅ Full Approver</td>
+          <td>👁️ View Only</td>
+          <td>✅ First-line Resolver</td>
+        </tr>
+        <tr>
+          <td><strong>Financial & Operational Reports</strong></td>
+          <td>✅ Full Access</td>
+          <td>✅ Full Access</td>
+          <td>👁️ Terminal Limited</td>
+        </tr>
+        <tr>
+          <td><strong>System Audit Trail Logs</strong></td>
+          <td>✅ Full Access</td>
+          <td>👁️ View Only</td>
+          <td>❌ No Access</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</body>
+</html>
