@@ -302,7 +302,7 @@ export default function RecognitionDashboardPage() {
               <div className="aspect-video w-full rounded-lg bg-black/90 overflow-hidden relative flex items-center justify-center border border-border">
                 <img
                   key={streamCameraId}
-                  src={`http://localhost:8000/preview/${streamCameraId}`}
+                  src={`/recognition-api/preview/${streamCameraId}`}
                   alt={`Live Stream ${streamCameraId}`}
                   className="h-full w-full object-contain"
                   onError={(e) => {
