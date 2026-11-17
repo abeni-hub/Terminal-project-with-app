@@ -738,4 +738,95 @@ export class RecognitionService {
       accuracyRate: parseFloat(accuracyRate.toFixed(2)),
     };
   }
+
+  async scanImage(file?: any, body?: { image?: string; imageBase64?: string; plateNumber?: string }) {
+    let plateNumber = body?.plateNumber || '';
+    let rawText = body?.plateNumber || '';
+    let confidence = 0.95;
+
+    const recognitionUrl = process.env.RECOGNITION_SERVICE_URL || 'http://recognition:8000';
+
+    try {
+      if (file || body?.image || body?.imageBase64) {
+        let responseData: any = null;
+
+        if (file && file.buffer) {
+          const formData = new FormData();
+          const blob = new Blob([file.buffer], { type: file.mimetype || 'image/jpeg' });
+          formData.append('file', blob, file.originalname || 'image.jpg');
+
+          const res = await fetch(`${recognitionUrl}/scan-image`, {
+            method: 'POST',
+            body: formData,
+          });
+          if (res.ok) {
+            responseData = await res.json();
+          }
+        } else if (body?.image || body?.imageBase64) {
+          const res = await fetch(`${recognitionUrl}/scan-image`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: body.image, imageBase64: body.imageBase64 }),
+          });
+          if (res.ok) {
+            responseData = await res.json();
+          }
+        }
+
+        if (responseData && responseData.plateNumber) {
+          plateNumber = responseData.plateNumber;
+          rawText = responseData.rawText || responseData.plateNumber;
+          confidence = responseData.confidence ?? 0.9;
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Recognition microservice scan-image call failed: ${err.message}`);
+    }
+
+    const normalizedPlate = PlateNormalizer.normalize(plateNumber);
+
+    let vehicle: any = null;
+    const cleanPlate = (normalizedPlate || rawText).replace(/[^A-Za-z0-9]/g, '');
+
+    if (cleanPlate) {
+      vehicle = await this.prisma.vehicle.findFirst({
+        where: {
+          OR: [
+            { plateNumber: normalizedPlate },
+            { plateNumber: rawText },
+            { plateNumber: { contains: cleanPlate, mode: 'insensitive' } },
+          ],
+        },
+        include: {
+          group: true,
+          account: true,
+        },
+      });
+    }
+
+    const success = Boolean(normalizedPlate || rawText || vehicle);
+
+    return {
+      success,
+      plateNumber: vehicle?.plateNumber || normalizedPlate || rawText,
+      confidence: vehicle ? Math.max(confidence, 0.95) : confidence,
+      vehicle: vehicle
+        ? {
+            id: vehicle.id,
+            plateNumber: vehicle.plateNumber,
+            model: vehicle.model,
+            type: vehicle.type,
+            capacity: vehicle.capacity,
+            status: vehicle.status,
+            journeyState: vehicle.journeyState,
+            groupId: vehicle.groupId,
+            groupName: vehicle.group?.name || null,
+            driverName: vehicle.driverName,
+            driverPhone: vehicle.driverPhone,
+            balance: vehicle.account?.balance ?? 0,
+          }
+        : null,
+      rawText: rawText || normalizedPlate,
+    };
+  }
 }

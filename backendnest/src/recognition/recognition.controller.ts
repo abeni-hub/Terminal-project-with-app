@@ -6,8 +6,11 @@ import {
   Param,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { Public } from '../common/decorators/public.decorator';
 import { RecognitionService } from './recognition.service';
@@ -18,6 +21,28 @@ import { QueryParamsDto } from '../common/dto/query-params.dto';
 @Controller('v1/recognition')
 export class RecognitionController {
   constructor(private readonly recognitionService: RecognitionService) {}
+
+  @Post('scan-image')
+  @Public()
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiOperation({ summary: 'Scan image to detect plate and lookup vehicle (Mobile App)' })
+  @ApiConsumes('multipart/form-data', 'application/json')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        image: { type: 'string', format: 'binary', description: 'Image file or base64 string' },
+        imageBase64: { type: 'string', description: 'Base64 image string' },
+        plateNumber: { type: 'string', description: 'Optional manual plate override' },
+      },
+    },
+  })
+  async scanImage(
+    @UploadedFile() file?: any,
+    @Body() body?: { image?: string; imageBase64?: string; plateNumber?: string },
+  ) {
+    return this.recognitionService.scanImage(file, body);
+  }
 
   @Post('process')
   @Public()

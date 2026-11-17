@@ -15,15 +15,19 @@ else:
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from fastapi import FastAPI, HTTPException, Response, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Response, BackgroundTasks, File, UploadFile, Body
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import base64
+import numpy as np
 
 from app.camera.factory import CameraProviderFactory
 from app.services.nestjs_client import NestJSClient
 from app.services.recognition_runner import RecognitionWorker
 from app.services.heartbeat_runner import HeartbeatRunner
+from app.detection.plate_detector import PlateDetector
+from app.ocr.recognizer import OCRRecognizer
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("RecognitionService")
@@ -46,6 +50,8 @@ app.add_middleware(
 workers: Dict[str, RecognitionWorker] = {}
 nestjs_client = NestJSClient()
 heartbeat_runner = HeartbeatRunner(workers, nestjs_client)
+single_plate_detector = PlateDetector()
+single_ocr_recognizer = OCRRecognizer()
 
 class StartCameraRequest(BaseModel):
     cameraId: str
@@ -53,6 +59,59 @@ class StartCameraRequest(BaseModel):
     cameraType: str = "ENTRY"
     sourceType: str = "USB"
     sourceAddress: str = "0"
+
+@app.post("/scan-image")
+async def scan_image(
+    file: Optional[UploadFile] = File(None),
+    payload: Optional[Dict[str, Any]] = Body(None),
+):
+    """
+    Direct Image OCR Scanner for Mobile Apps & Backend Service.
+    Accepts:
+    - Multipart image file (field name: 'file' or 'image')
+    - OR JSON body with base64 image: {"image": "..."} or {"imageBase64": "..."}
+    """
+    img_bytes = None
+    if file:
+        img_bytes = await file.read()
+    elif payload and isinstance(payload, dict):
+        b64_str = payload.get("image") or payload.get("imageBase64")
+        if b64_str:
+            if "," in b64_str:
+                b64_str = b64_str.split(",", 1)[1]
+            try:
+                img_bytes = base64.b64decode(b64_str)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 string: {e}")
+
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="No image file or base64 data provided.")
+
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Failed to decode image.")
+
+    # 1. Detect plate crop
+    plate_region = single_plate_detector.detect_plate_region(frame)
+    if plate_region is not None:
+        plate_crop, _ = plate_region
+    else:
+        plate_crop = frame
+
+    # 2. Run OCR
+    raw_text, norm_text, conf = single_ocr_recognizer.recognize(plate_crop)
+
+    # 3. Second pass on full image if crop was unreadable
+    if not norm_text and plate_region is not None:
+        raw_text, norm_text, conf = single_ocr_recognizer.recognize(frame)
+
+    return {
+        "success": bool(norm_text),
+        "plateNumber": norm_text,
+        "confidence": round(float(conf), 2) if conf else 0.0,
+        "rawText": raw_text or norm_text,
+    }
 
 @app.on_event("startup")
 def startup_event():
