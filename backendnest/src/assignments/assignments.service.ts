@@ -2,7 +2,7 @@ import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateAssignmentDto, UpdateAssignmentDto } from './dto/create-assignment.dto';
 import { QueryParamsDto } from '../common/dto/query-params.dto';
-import { getCurrentWeekNumber, getWeekDateRange } from '../common/utils/date.util';
+import { getCurrentWeekNumber, getWeekDateRange, getCurrentQuarter, getQuarterDateRange } from '../common/utils/date.util';
 
 @Injectable()
 export class AssignmentsService {
@@ -134,15 +134,23 @@ export class AssignmentsService {
     const isDispatcher = currentUser?.role?.name === 'DISPATCHER' || currentUser?.roleId === 'role-dispatcher';
 
     if (isDispatcher && currentUser) {
-      // Dispatcher View: ONLY active week, ONLY routes assigned to logged-in dispatcher, published/locked only
-      const currentWeek = getCurrentWeekNumber();
-      where.weekNumber = currentWeek;
+      // Dispatcher View: ONLY active 3-month periodic assignments assigned to logged-in dispatcher, published/locked only
+      const now = new Date();
+      const currentQuarter = getCurrentQuarter();
       where.status = { in: ['PUBLISHED', 'LOCKED'] };
       where.dispatcherIds = { has: currentUser.id };
+      where.OR = [
+        { weekNumber: currentQuarter },
+        { weekStart: { lte: now }, weekEnd: { gte: now } },
+      ];
       if (currentUser.terminalId) {
-        where.OR = [
-          { originTerminalId: currentUser.terminalId },
-          { destinationTerminalId: currentUser.terminalId },
+        where.AND = [
+          {
+            OR: [
+              { originTerminalId: currentUser.terminalId },
+              { destinationTerminalId: currentUser.terminalId },
+            ],
+          },
         ];
       }
     } else {
@@ -318,13 +326,16 @@ export class AssignmentsService {
   }
 
   /**
-   * Generate a preview of weekly schedule assignments for a given week.
+   * Generate a preview of 3-month schedule assignments for a given quarter (1-4) or period.
    * - Pairs each vehicle group with a route round-robin.
    * - Auto-assigns distinct dispatchers from origin and destination terminals round-robin
    *   (enforcing: multiple dispatchers at a terminal handle different routes).
    */
-  async generatePreview(weekNumber: number) {
-    const { weekStart: weekStartStr, weekEnd: weekEndStr } = getWeekDateRange(weekNumber);
+  async generatePreview(periodNumber: number, year: number = new Date().getFullYear()) {
+    const isQuarter = periodNumber >= 1 && periodNumber <= 4;
+    const { weekStart: weekStartStr, weekEnd: weekEndStr, periodLabel } = isQuarter
+      ? getQuarterDateRange(periodNumber, year)
+      : { ...getWeekDateRange(periodNumber, year), periodLabel: `Week ${periodNumber}` };
 
     // Fetch active routes, vehicle groups, and active dispatchers
     const [routes, groups, dispatchers] = await Promise.all([
@@ -361,9 +372,9 @@ export class AssignmentsService {
       const group = groups[i];
       const route = routes[i % routes.length];
 
-      // Check if this group is already assigned for this week
+      // Check if this group is already assigned for this quarter/period
       const existing = await this.prisma.weeklyAssignment.findFirst({
-        where: { vehicleGroupId: group.id, weekNumber },
+        where: { vehicleGroupId: group.id, weekNumber: periodNumber },
       });
 
       const assignedDispatchers: any[] = [];
@@ -384,9 +395,13 @@ export class AssignmentsService {
         terminalUsageCount[route.destinationTerminalId] = (terminalUsageCount[route.destinationTerminalId] || 0) + 1;
       }
 
+      const assignmentTitle = isQuarter
+        ? `${periodLabel} - ${group.name} - ${terminalMap[route.originTerminalId] || route.originTerminalId} to ${terminalMap[route.destinationTerminalId] || route.destinationTerminalId}`
+        : `Week ${periodNumber} - ${group.name} - ${terminalMap[route.originTerminalId] || route.originTerminalId} to ${terminalMap[route.destinationTerminalId] || route.destinationTerminalId}`;
+
       preview.push({
-        name: `Week ${weekNumber} - ${group.name} - ${terminalMap[route.originTerminalId] || route.originTerminalId} to ${terminalMap[route.destinationTerminalId] || route.destinationTerminalId}`,
-        weekNumber,
+        name: assignmentTitle,
+        weekNumber: periodNumber,
         weekStart: weekStartStr,
         weekEnd: weekEndStr,
         vehicleGroupId: group.id,
@@ -402,7 +417,14 @@ export class AssignmentsService {
       });
     }
 
-    return { weekNumber, weekStart: weekStartStr, weekEnd: weekEndStr, assignments: preview };
+    return {
+      weekNumber: periodNumber,
+      quarterNumber: isQuarter ? periodNumber : undefined,
+      periodLabel,
+      weekStart: weekStartStr,
+      weekEnd: weekEndStr,
+      assignments: preview,
+    };
   }
 
   /**

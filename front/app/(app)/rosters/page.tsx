@@ -15,29 +15,62 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { ASSIGNMENT_STATUS_LABELS } from '@/src/constants';
 import { toast } from 'sonner';
 import {
-  Plus, Send, AlertTriangle, CheckCircle, CalendarDays, MapPin,
-  Sparkles, Loader2, Info, Lock, Eye, Archive, CheckCircle2, ShieldCheck,
-  Truck, ArrowRight, RefreshCw, UserCheck,
+  Plus, Send, CalendarDays,
+  Sparkles, Loader2, Lock, Eye, Archive, CheckCircle2,
+  Truck, ArrowRight, RefreshCw, UserCheck, Clock,
 } from 'lucide-react';
 import type { AssignmentStatus } from '@/src/types/operations';
 import { useAuthStore } from '@/src/store/auth-store';
 
-function currentWeekNumber() {
+/**
+ * Returns the current 3-month quarter information and date boundaries.
+ * Municipal route assignments rotate once every 3 months.
+ */
+function currentQuarterInfo() {
   const now = new Date();
-  const jan1 = new Date(now.getFullYear(), 0, 1);
-  const dayOffset = jan1.getDay() === 0 ? 6 : jan1.getDay() - 1;
-  return Math.ceil(((now.getTime() - jan1.getTime()) / 86400000 + dayOffset + 1) / 7);
+  const year = now.getFullYear();
+  const quarter = Math.floor(now.getMonth() / 3) + 1;
+  const startMonth = (quarter - 1) * 3;
+  const startDate = new Date(year, startMonth, 1);
+  const endDate = new Date(year, startMonth + 3, 0);
+  const quarterNames = ['Q1 (Jan - Mar)', 'Q2 (Apr - Jun)', 'Q3 (Jul - Sep)', 'Q4 (Oct - Dec)'];
+  return {
+    quarter,
+    year,
+    label: `${year} ${quarterNames[quarter - 1]}`,
+    quarterName: quarterNames[quarter - 1],
+    startDate: startDate.toISOString().split('T')[0],
+    endDate: endDate.toISOString().split('T')[0],
+  };
+}
+
+/**
+ * Returns date range and label for any specified quarter and year.
+ */
+function getQuarterDates(quarter: number, year: number = new Date().getFullYear()) {
+  const q = Math.max(1, Math.min(4, quarter));
+  const startMonth = (q - 1) * 3;
+  const startDate = new Date(year, startMonth, 1);
+  const endDate = new Date(year, startMonth + 3, 0);
+  const quarterNames = ['Q1 (Jan - Mar)', 'Q2 (Apr - Jun)', 'Q3 (Jul - Sep)', 'Q4 (Oct - Dec)'];
+  return {
+    quarter: q,
+    year,
+    label: `${year} ${quarterNames[q - 1]}`,
+    quarterName: quarterNames[q - 1],
+    startDate: startDate.toISOString().split('T')[0],
+    endDate: endDate.toISOString().split('T')[0],
+  };
 }
 
 export default function RostersPage() {
   const session = useAuthStore((s) => s.session);
   const isDispatcher = session?.role?.name === 'DISPATCHER' || session?.user?.roleId === 'role-dispatcher';
-  const currWeek = currentWeekNumber();
+  const currentPeriod = currentQuarterInfo();
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -62,7 +95,7 @@ export default function RostersPage() {
       search,
       filters: {
         status: statusFilter !== 'ALL' ? statusFilter : undefined,
-        ...(isDispatcher ? { weekNumber: currWeek, dispatcherId: session?.user?.id } : {}),
+        ...(isDispatcher ? { weekNumber: currentPeriod.quarter, dispatcherId: session?.user?.id } : {}),
       },
     }),
   });
@@ -122,7 +155,7 @@ export default function RostersPage() {
   const columns = useMemo<ColumnDef<WeeklyRouteAssignment>[]>(() => [
     {
       accessorKey: 'name',
-      header: 'Weekly Assignment',
+      header: '3-Month Assignment',
       cell: ({ row }) => (
         <div>
           <div className="flex items-center gap-2">
@@ -142,12 +175,16 @@ export default function RostersPage() {
     },
     {
       accessorKey: 'weekNumber',
-      header: 'Week',
-      cell: ({ row }) => (
-        <Badge variant="secondary" className="font-mono font-medium">
-          W{row.original.weekNumber}
-        </Badge>
-      ),
+      header: 'Period / Quarter',
+      cell: ({ row }) => {
+        const qNum = row.original.weekNumber;
+        const isQ = qNum >= 1 && qNum <= 4;
+        return (
+          <Badge variant="secondary" className="font-medium text-xs">
+            {isQ ? `Q${qNum} (3 Months)` : `Week ${qNum}`}
+          </Badge>
+        );
+      },
     },
     {
       accessorKey: 'vehicleGroupName',
@@ -273,11 +310,11 @@ export default function RostersPage() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title={isDispatcher ? "My Weekly Route Assignments" : "Weekly Route Roster & Assignments"}
+        title={isDispatcher ? "Published Assignments (Approved by Planner)" : "Quarterly Route Rosters & Assignments (3 Months)"}
         description={
           isDispatcher
-            ? `Active operating assignments for Week ${currWeek} assigned to ${session?.user?.name}`
-            : "Authoritative weekly vehicle-to-route assignments powering ANPR terminal gate verification and dispatch control"
+            ? `Active 3-month periodic route rosters approved by Municipal Planner for ${currentPeriod.label} assigned to ${session?.user?.name}`
+            : "Authoritative 3-month (quarterly) vehicle-to-route assignments guiding terminal dispatch and ANPR gate verification"
         }
         actions={
           <div className="flex items-center gap-2">
@@ -303,7 +340,7 @@ export default function RostersPage() {
           <div className="flex items-center gap-2">
             <CalendarDays className="h-4 w-4 text-primary" />
             <span className="text-xs font-semibold">
-              Currently Active Week: <span className="text-primary font-bold">Week #{currWeek}</span>
+              Currently Active Period: <span className="text-primary font-bold">{currentPeriod.label} (3-Month Assignment)</span>
             </span>
           </div>
           <Badge variant="outline" className="text-xs">
@@ -376,8 +413,8 @@ export default function RostersPage() {
       <ConfirmDialog
         open={!!reviewing}
         onOpenChange={(o) => !o && setReviewing(null)}
-        title="Review Weekly Assignment"
-        description={`Mark assignment "${reviewing?.name}" as REVIEWED? This confirms route and dispatcher configuration before publishing.`}
+        title="Review 3-Month Assignment"
+        description={`Mark assignment "${reviewing?.name}" as REVIEWED? This confirms route and dispatcher configuration for the 3-month period before publishing.`}
         confirmLabel="Confirm Review"
         onConfirm={() => reviewing && reviewMut.mutate(reviewing.id)}
         loading={reviewMut.isPending}
@@ -387,8 +424,8 @@ export default function RostersPage() {
       <ConfirmDialog
         open={!!publishing}
         onOpenChange={(o) => !o && setPublishing(null)}
-        title="Publish Weekly Assignment"
-        description={`Publish "${publishing?.name}" to activate ANPR terminal gate verification? Vehicles belonging to "${publishing?.vehicleGroupName}" will immediately be recognized at ${publishing?.originTerminalName} and ${publishing?.destinationTerminalName}.`}
+        title="Publish 3-Month Assignment"
+        description={`Publish "${publishing?.name}" to activate ANPR terminal gate verification? Vehicles belonging to "${publishing?.vehicleGroupName}" will immediately be recognized at ${publishing?.originTerminalName} and ${publishing?.destinationTerminalName} throughout the 3-month period.`}
         confirmLabel="Publish to Gates"
         onConfirm={() => publishing && publishMut.mutate(publishing.id)}
         loading={publishMut.isPending}
@@ -409,7 +446,7 @@ export default function RostersPage() {
       <ConfirmDialog
         open={!!archiving}
         onOpenChange={(o) => !o && setArchiving(null)}
-        title="Archive Weekly Assignment"
+        title="Archive 3-Month Assignment"
         description={`Archive completed assignment "${archiving?.name}"? It will be preserved in historical reports.`}
         confirmLabel="Archive"
         onConfirm={() => archiving && archiveMut.mutate(archiving.id)}
@@ -419,18 +456,22 @@ export default function RostersPage() {
   );
 }
 
-// ─── Auto-Generate Schedule Dialog ──────────────────────────────────────────
+// ─── Auto-Generate 3-Month Schedule Dialog ──────────────────────────────────
 
 function AutoGenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const [weekNumber, setWeekNumber] = useState(currentWeekNumber());
+  const current = currentQuarterInfo();
+  const [quarter, setQuarter] = useState(current.quarter);
+  const [year, setYear] = useState(current.year);
   const [preview, setPreview] = useState<any>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const qc = useQueryClient();
 
+  const selectedPeriod = getQuarterDates(quarter, year);
+
   const generatePreview = async () => {
     setLoadingPreview(true);
     try {
-      const result = await api.assignments.generatePreview(weekNumber);
+      const result = await api.assignments.generatePreview(quarter);
       setPreview(result);
     } catch (e: any) {
       toast.error(e?.message || 'Failed to generate schedule preview');
@@ -454,43 +495,64 @@ function AutoGenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChang
   });
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setPreview(null); setWeekNumber(currentWeekNumber()); } }}>
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) { setPreview(null); setQuarter(current.quarter); } }}>
       <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-primary" /> Auto-Generate Weekly Route Schedule
+            <Sparkles className="h-5 w-5 text-primary" /> Auto-Generate 3-Month Route Schedule
           </DialogTitle>
           <DialogDescription className="text-xs">
-            Distributes active vehicle groups across routes round-robin with distinct dispatchers per terminal and conflict avoidance.
+            Distributes active vehicle groups across routes round-robin for the selected 3-month period with distinct dispatchers per terminal and conflict avoidance.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4 py-2 flex-1 overflow-y-auto">
-          <div className="flex items-center gap-3 p-3 rounded-lg border bg-muted/40">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 p-3 rounded-lg border bg-muted/40 items-end">
             <div className="space-y-1">
-              <Label className="text-xs font-semibold">Target Week Number</Label>
+              <Label className="text-xs font-semibold">Select 3-Month Period (Quarter)</Label>
+              <Select value={String(quarter)} onValueChange={(v) => { setQuarter(Number(v)); setPreview(null); }}>
+                <SelectTrigger className="h-8 text-xs">
+                  <SelectValue placeholder="Select Quarter" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="1">Q1 (Jan - Mar)</SelectItem>
+                  <SelectItem value="2">Q2 (Apr - Jun)</SelectItem>
+                  <SelectItem value="3">Q3 (Jul - Sep)</SelectItem>
+                  <SelectItem value="4">Q4 (Oct - Dec)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-semibold">Planning Year</Label>
               <Input
                 type="number"
-                min={1}
-                max={53}
-                className="w-28 h-8 text-xs font-mono"
-                value={weekNumber}
-                onChange={(e) => { setWeekNumber(Number(e.target.value)); setPreview(null); }}
+                min={2024}
+                max={2030}
+                className="h-8 text-xs font-mono"
+                value={year}
+                onChange={(e) => { setYear(Number(e.target.value)); setPreview(null); }}
               />
             </div>
-            <div className="pt-4">
-              <Button onClick={generatePreview} disabled={loadingPreview || !weekNumber} size="sm">
+
+            <div>
+              <Button onClick={generatePreview} disabled={loadingPreview || !quarter} size="sm" className="w-full">
                 {loadingPreview ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Sparkles className="mr-1.5 h-3.5 w-3.5" />}
-                Generate Preview
+                Generate 3-Month Preview
               </Button>
             </div>
+          </div>
+
+          <div className="text-xs text-muted-foreground flex items-center gap-1.5 px-1">
+            <Clock className="h-3.5 w-3.5 text-primary" />
+            <span>Target Cycle: <strong>{selectedPeriod.label}</strong> ({selectedPeriod.startDate} to {selectedPeriod.endDate} — 3 Months)</span>
           </div>
 
           {preview && (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-xs">
                 <span className="font-semibold text-foreground">
-                  Week {preview.weekNumber} Preview — {preview.assignments.length} assignment(s)
+                  {preview.periodLabel || `Quarter ${preview.weekNumber}`} Preview — {preview.assignments.length} assignment(s)
                 </span>
                 <span className="text-muted-foreground font-mono">
                   {preview.weekStart} to {preview.weekEnd}
@@ -538,17 +600,21 @@ function AutoGenerateDialog({ open, onOpenChange }: { open: boolean; onOpenChang
   );
 }
 
-// ─── Manual Assignment Wizard ────────────────────────────────────────────────
+// ─── Manual Assignment Wizard (3-Month Cycle) ───────────────────────────────
 
 function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const current = currentQuarterInfo();
   const [step, setStep] = useState(1);
-  const [weekNumber, setWeekNumber] = useState(currentWeekNumber());
+  const [quarter, setQuarter] = useState(current.quarter);
+  const [year, setYear] = useState(current.year);
   const [vehicleGroupId, setVehicleGroupId] = useState('');
   const [originTerminalId, setOriginTerminalId] = useState('');
   const [destinationTerminalId, setDestinationTerminalId] = useState('');
   const [originDispatcherId, setOriginDispatcherId] = useState<string>('');
   const [destDispatcherId, setDestDispatcherId] = useState<string>('');
   const qc = useQueryClient();
+
+  const periodDates = getQuarterDates(quarter, year);
 
   const { data: groupsData } = useQuery<import('@/src/services/http').PaginatedResponse<import('@/src/types/vehicle').VehicleGroup>>(
     { queryKey: ['vehicle-groups-all'], queryFn: () => api.vehicleGroups.list({ page: 1, pageSize: 100 }) },
@@ -577,18 +643,16 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
   const createMut = useMutation({
     mutationFn: () => {
       const group = groups.find((g: import('@/src/types/vehicle').VehicleGroup) => g.id === vehicleGroupId);
-      const weekStart = new Date(new Date().getFullYear(), 0, 1 + (weekNumber - 1) * 7).toISOString().split('T')[0];
-      const weekEnd = new Date(new Date(weekStart).getTime() + 6 * 86400000).toISOString().split('T')[0];
       const originName = terminals.find((t: import('@/src/types/terminal').Terminal) => t.id === originTerminalId)?.name ?? '';
       const destName = terminals.find((t: import('@/src/types/terminal').Terminal) => t.id === destinationTerminalId)?.name ?? '';
       
       const dispatcherIds = [originDispatcherId, destDispatcherId].filter(Boolean);
 
       return api.assignments.create({
-        name: `Week ${weekNumber} - ${group?.name ?? ''} - ${originName} to ${destName}`,
-        weekNumber,
-        weekStart,
-        weekEnd,
+        name: `Q${quarter} ${year} - ${group?.name ?? ''} - ${originName} to ${destName}`,
+        weekNumber: quarter,
+        weekStart: periodDates.startDate,
+        weekEnd: periodDates.endDate,
         vehicleGroupId,
         originTerminalId,
         destinationTerminalId,
@@ -600,7 +664,7 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
       if (assignment.conflicts && assignment.conflicts.length > 0) {
         toast.warning(`Assignment created with ${assignment.conflicts.length} conflict(s). Review before publishing.`);
       } else {
-        toast.success('Assignment created successfully');
+        toast.success('3-Month Route Assignment created successfully');
       }
       onOpenChange(false);
       resetWizard();
@@ -610,6 +674,8 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
 
   const resetWizard = () => {
     setStep(1);
+    setQuarter(current.quarter);
+    setYear(current.year);
     setVehicleGroupId('');
     setOriginTerminalId('');
     setDestinationTerminalId('');
@@ -618,7 +684,7 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
   };
 
   const canProceed = () => {
-    if (step === 1) return weekNumber > 0;
+    if (step === 1) return quarter >= 1 && quarter <= 4;
     if (step === 2) return !!vehicleGroupId;
     if (step === 3) return !!originTerminalId;
     if (step === 4) return !!destinationTerminalId && destinationTerminalId !== originTerminalId;
@@ -626,15 +692,18 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
     return true;
   };
 
-  const steps = ['Select Week', 'Vehicle Group', 'Origin Terminal', 'Destination', 'Assign Dispatchers', 'Review & Validate'];
+  const steps = ['Select Period', 'Vehicle Group', 'Origin Terminal', 'Destination', 'Assign Dispatchers', 'Review & Validate'];
 
   return (
     <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) resetWizard(); }}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <CalendarDays className="h-5 w-5 text-primary" /> New Weekly Route Assignment
+            <CalendarDays className="h-5 w-5 text-primary" /> New 3-Month Route Assignment
           </DialogTitle>
+          <DialogDescription className="text-xs">
+            Planner configures authoritative 3-month periodic vehicle group routes and designated dispatchers.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex items-center gap-1 flex-wrap">
@@ -651,12 +720,44 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
 
         <div className="min-h-[240px] space-y-4">
           {step === 1 && (
-            <div className="space-y-3">
-              <Label>Select the week for this assignment</Label>
-              <Input type="number" value={weekNumber} onChange={(e) => setWeekNumber(Number(e.target.value))} min={1} max={53} />
-              <p className="text-xs text-muted-foreground">
-                The vehicle group will be assigned to this route for the full week (Monday to Sunday).
-              </p>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label>Select 3-Month Planning Period (Quarter)</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { q: 1, name: 'Q1', desc: 'January 1 – March 31' },
+                    { q: 2, name: 'Q2', desc: 'April 1 – June 30' },
+                    { q: 3, name: 'Q3', desc: 'July 1 – September 30' },
+                    { q: 4, name: 'Q4', desc: 'October 1 – December 31' },
+                  ].map((item) => (
+                    <div
+                      key={item.q}
+                      onClick={() => setQuarter(item.q)}
+                      className={`p-3 rounded-lg border cursor-pointer transition-all ${quarter === item.q ? 'border-primary bg-primary/10 ring-1 ring-primary' : 'hover:bg-muted/50'}`}
+                    >
+                      <div className="font-semibold text-sm">{item.name} ({year})</div>
+                      <div className="text-xs text-muted-foreground">{item.desc}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Planning Year</Label>
+                  <Input
+                    type="number"
+                    value={year}
+                    onChange={(e) => setYear(Number(e.target.value))}
+                    min={2024}
+                    max={2030}
+                    className="w-32 h-8 text-xs font-mono"
+                  />
+                </div>
+                <div className="pt-4 text-xs text-muted-foreground">
+                  Span: <strong>{periodDates.startDate}</strong> to <strong>{periodDates.endDate}</strong> (3 Months)
+                </div>
+              </div>
             </div>
           )}
           {step === 2 && (
@@ -767,8 +868,14 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
               <Label>Review and validate</Label>
               <Card>
                 <CardContent className="space-y-2 p-4 text-sm">
-                  <div className="flex justify-between"><span className="text-muted-foreground">Week</span><span className="font-medium">Week {weekNumber}</span></div>
-                  <div className="flex justify-between"><span className="text-muted-foreground">Vehicle Group</span><span className="font-medium">{groups.find((g: import('@/src/types/vehicle').VehicleGroup) => g.id === vehicleGroupId)?.name ?? '-'}</span></div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">3-Month Period</span>
+                    <span className="font-medium">{periodDates.label} ({periodDates.startDate} to {periodDates.endDate})</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Vehicle Group</span>
+                    <span className="font-medium">{groups.find((g: import('@/src/types/vehicle').VehicleGroup) => g.id === vehicleGroupId)?.name ?? '-'}</span>
+                  </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Route</span>
                     <span className="font-medium">
@@ -798,7 +905,7 @@ function AssignmentWizard({ open, onOpenChange }: { open: boolean; onOpenChange:
             <Button onClick={() => setStep(step + 1)} disabled={!canProceed()}>Next</Button>
           ) : (
             <Button onClick={() => createMut.mutate()} disabled={createMut.isPending}>
-              {createMut.isPending ? 'Creating...' : 'Create Assignment'}
+              {createMut.isPending ? 'Creating...' : 'Create 3-Month Assignment'}
             </Button>
           )}
         </DialogFooter>

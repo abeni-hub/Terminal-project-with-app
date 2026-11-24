@@ -461,8 +461,8 @@ function DispatcherDashboard({ userId }: { userId: string }) {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="h-4 w-4 text-primary" /> Today's Assignments</CardTitle>
-            <CardDescription>Your active weekly route assignments</CardDescription>
+            <CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="h-4 w-4 text-primary" /> Active Assignments (3-Month Period)</CardTitle>
+            <CardDescription>Your active 3-month periodic route assignments</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
             {data.todayAssignments.length === 0 ? (

@@ -370,14 +370,14 @@ async function main() {
   }
   console.log('Devices seeded.');
 
-  // Seed Weekly Assignments (Including Current Week 38)
+  // Seed 3-Month Quarterly Assignments (Including Active Q4 Period: Oct - Dec 2026)
   const assignments = [
     {
       id: 'a-w38-g1',
-      name: 'Week 38 - Group A (Mercato to Bole)',
-      weekNumber: 38,
-      weekStart: new Date('2026-09-21T00:00:00.000Z'),
-      weekEnd: new Date('2026-09-27T23:59:59.000Z'),
+      name: '2026 Q4 (Oct - Dec) - Group A (Mercato to Bole)',
+      weekNumber: 4,
+      weekStart: new Date('2026-10-01T00:00:00.000Z'),
+      weekEnd: new Date('2026-12-31T23:59:59.000Z'),
       vehicleGroupId: 'g1',
       originTerminalId: 't2',
       destinationTerminalId: 't3',
@@ -386,10 +386,10 @@ async function main() {
     },
     {
       id: 'a-w38-g2',
-      name: 'Week 38 - Group B (Piassa to Mercato)',
-      weekNumber: 38,
-      weekStart: new Date('2026-09-21T00:00:00.000Z'),
-      weekEnd: new Date('2026-09-27T23:59:59.000Z'),
+      name: '2026 Q4 (Oct - Dec) - Group B (Piassa to Mercato)',
+      weekNumber: 4,
+      weekStart: new Date('2026-10-01T00:00:00.000Z'),
+      weekEnd: new Date('2026-12-31T23:59:59.000Z'),
       vehicleGroupId: 'g2',
       originTerminalId: 't4',
       destinationTerminalId: 't2',
@@ -398,10 +398,10 @@ async function main() {
     },
     {
       id: 'a1',
-      name: 'Week 32 Planning',
-      weekNumber: 32,
-      weekStart: new Date('2026-08-03T00:00:00.000Z'),
-      weekEnd: new Date('2026-08-09T23:59:59.000Z'),
+      name: '2026 Q3 (Jul - Sep) - Group A (Megenagna to Mercato)',
+      weekNumber: 3,
+      weekStart: new Date('2026-07-01T00:00:00.000Z'),
+      weekEnd: new Date('2026-09-30T23:59:59.000Z'),
       vehicleGroupId: 'g1',
       originTerminalId: 't1',
       destinationTerminalId: 't2',
@@ -417,7 +417,7 @@ async function main() {
       create: a,
     });
   }
-  console.log('Weekly assignments seeded.');
+  console.log('Quarterly (3-Month) assignments seeded.');
 
   // Seed Queue Entries
   const queueEntries = [

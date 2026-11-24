@@ -149,15 +149,17 @@ function getWeekRange(weekNum: number): { start: string; end: string } {
   return { start: weekStart.toISOString().split('T')[0], end: weekEnd.toISOString().split('T')[0] };
 }
 
-const currentWeek = Math.ceil(((now.getTime() - new Date(now.getFullYear(), 0, 1).getTime()) / 86400000 + new Date(now.getFullYear(), 0, 1).getDay() + 1) / 7);
+const currentQuarter = Math.floor(now.getMonth() / 3) + 1;
+const quarterStart = new Date(now.getFullYear(), (currentQuarter - 1) * 3, 1).toISOString().split('T')[0];
+const quarterEnd = new Date(now.getFullYear(), currentQuarter * 3, 0).toISOString().split('T')[0];
 
 export const mockWeeklyAssignments: WeeklyRouteAssignment[] = [
   {
     id: 'wa1',
-    name: `Week ${currentWeek} - Group A - Mercato to Bole`,
-    weekNumber: currentWeek,
-    weekStart: getWeekRange(currentWeek).start,
-    weekEnd: getWeekRange(currentWeek).end,
+    name: `Q${currentQuarter} ${now.getFullYear()} - Group A - Mercato to Bole`,
+    weekNumber: currentQuarter,
+    weekStart: quarterStart,
+    weekEnd: quarterEnd,
     vehicleGroupId: 'g1',
     vehicleGroupName: 'Group A',
     originTerminalId: 't2',
@@ -174,10 +176,10 @@ export const mockWeeklyAssignments: WeeklyRouteAssignment[] = [
   },
   {
     id: 'wa2',
-    name: `Week ${currentWeek} - Group B - Mercato to Piazza`,
-    weekNumber: currentWeek,
-    weekStart: getWeekRange(currentWeek).start,
-    weekEnd: getWeekRange(currentWeek).end,
+    name: `Q${currentQuarter} ${now.getFullYear()} - Group B - Mercato to Piazza`,
+    weekNumber: currentQuarter,
+    weekStart: quarterStart,
+    weekEnd: quarterEnd,
     vehicleGroupId: 'g2',
     vehicleGroupName: 'Group B',
     originTerminalId: 't2',
@@ -194,10 +196,10 @@ export const mockWeeklyAssignments: WeeklyRouteAssignment[] = [
   },
   {
     id: 'wa3',
-    name: `Week ${currentWeek} - Group C - Megenagna to Bole`,
-    weekNumber: currentWeek,
-    weekStart: getWeekRange(currentWeek).start,
-    weekEnd: getWeekRange(currentWeek).end,
+    name: `Q${currentQuarter} ${now.getFullYear()} - Group C - Megenagna to Bole`,
+    weekNumber: currentQuarter,
+    weekStart: quarterStart,
+    weekEnd: quarterEnd,
     vehicleGroupId: 'g3',
     vehicleGroupName: 'Group C',
     originTerminalId: 't1',
@@ -214,10 +216,10 @@ export const mockWeeklyAssignments: WeeklyRouteAssignment[] = [
   },
   {
     id: 'wa4',
-    name: `Week ${currentWeek + 1} - Group A - Mercato to Lebu`,
-    weekNumber: currentWeek + 1,
-    weekStart: getWeekRange(currentWeek + 1).start,
-    weekEnd: getWeekRange(currentWeek + 1).end,
+    name: `Q${(currentQuarter % 4) + 1} ${now.getFullYear()} - Group A - Mercato to Lebu`,
+    weekNumber: (currentQuarter % 4) + 1,
+    weekStart: quarterStart,
+    weekEnd: quarterEnd,
     vehicleGroupId: 'g1',
     vehicleGroupName: 'Group A',
     originTerminalId: 't2',

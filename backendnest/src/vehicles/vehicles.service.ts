@@ -48,12 +48,17 @@ export class VehiclesService {
     } else if (query.groupId && query.groupId !== 'all') {
       where.groupId = query.groupId;
     } else if (query.dispatcherId && query.dispatcherId !== 'all') {
-      const currentWeek = require('../common/utils/date.util').getCurrentWeekNumber();
+      const { getCurrentQuarter } = require('../common/utils/date.util');
+      const currentQuarter = getCurrentQuarter();
+      const now = new Date();
       const activeAssignments = await this.prisma.weeklyAssignment.findMany({
         where: {
-          weekNumber: currentWeek,
           status: { in: ['PUBLISHED', 'LOCKED'] },
           dispatcherIds: { has: query.dispatcherId },
+          OR: [
+            { weekNumber: currentQuarter },
+            { weekStart: { lte: now }, weekEnd: { gte: now } },
+          ],
         },
         select: { vehicleGroupId: true },
       });

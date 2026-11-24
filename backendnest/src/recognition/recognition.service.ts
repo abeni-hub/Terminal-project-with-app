@@ -443,14 +443,36 @@ export class RecognitionService {
       };
     }
 
-    // Validate Weekly Roster Assignment for this terminal & vehicle group
-    const activeAssignments = await this.prisma.weeklyAssignment.findMany({
+    // Validate Periodic Route Assignment for this terminal & vehicle group (3-month cycle)
+    const now = new Date();
+    const { getCurrentQuarter } = require('../common/utils/date.util');
+    const currentQuarter = getCurrentQuarter();
+
+    let activeAssignments = await this.prisma.weeklyAssignment.findMany({
       where: {
         vehicleGroupId: vehicle.groupId,
         status: { in: ['PUBLISHED', 'LOCKED'] },
         OR: [{ originTerminalId: terminalId }, { destinationTerminalId: terminalId }],
+        AND: [
+          {
+            OR: [
+              { weekNumber: currentQuarter },
+              { weekStart: { lte: now }, weekEnd: { gte: now } },
+            ],
+          },
+        ],
       },
     });
+
+    if (activeAssignments.length === 0) {
+      activeAssignments = await this.prisma.weeklyAssignment.findMany({
+        where: {
+          vehicleGroupId: vehicle.groupId,
+          status: { in: ['PUBLISHED', 'LOCKED'] },
+          OR: [{ originTerminalId: terminalId }, { destinationTerminalId: terminalId }],
+        },
+      });
+    }
 
     // CASE 1: Vehicle Exists AND Correctly Assigned to current terminal's weekly roster
     if (activeAssignments.length > 0) {

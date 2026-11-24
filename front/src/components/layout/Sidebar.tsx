@@ -82,7 +82,14 @@ export function Sidebar() {
                         <div className="flex flex-1 items-center justify-between overflow-hidden">
                           <span className="truncate">{item.label}</span>
                           {item.badge && (
-                            <span className="ml-auto rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            <span
+                              className={cn(
+                                'ml-auto rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wide',
+                                item.badge === 'Approved'
+                                  ? 'border border-emerald-500/30 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                  : 'bg-primary/20 text-primary'
+                              )}
+                            >
                               {item.badge}
                             </span>
                           )}

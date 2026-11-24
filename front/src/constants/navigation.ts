@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Users, Building2, Route as RouteIcon, Bus, CalendarDays,
   ListOrdered, AlertTriangle, ShieldCheck, FileBarChart, ScrollText,
   Smartphone, Settings, Shield, Car, DollarSign, Camera, Scan, History, BarChart3, ShieldAlert,
-  CreditCard, WalletCards, Contact2
+  CreditCard, WalletCards, Contact2, Send, Activity
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -30,8 +30,9 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Vehicle Accounts', href: '/vehicle-accounts', icon: WalletCards, permission: 'vehicle_account.view', description: 'Fleet balances & financial ledger' },
   { label: 'Terminals', href: '/terminals', icon: Building2, permission: 'terminals.manage', description: 'Terminal management' },
   { label: 'Routes', href: '/routes', icon: RouteIcon, permission: 'routes.manage', description: 'Route configuration' },
-  { label: 'Weekly Assignments', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: 'Weekly route planning' },
-  { label: 'Published Assignments', href: '/rosters', icon: CalendarDays, permission: 'queue.view', description: 'View published assignments' },
+  { label: 'Quarterly Assignments', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: '3-Month periodic route planning' },
+  { label: 'Weekly Assignments', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: 'Periodic route planning' },
+  { label: 'Published Assignments', href: '/rosters', icon: CalendarDays, permission: 'queue.view', badge: 'Approved', description: 'View approved 3-month published assignments' },
   { label: 'Recognition Feed', href: '/recognition/dashboard', icon: Scan, permission: 'queue.view', description: 'Live ALPR stream & alerts' },
   { label: 'Recognition History', href: '/recognition/history', icon: History, permission: 'queue.view', description: 'ALPR recognition log' },
   { label: 'Unregistered Vehicles', href: '/recognition/unknown', icon: ShieldAlert, permission: 'queue.view', description: 'Review & assign unknown plates' },
@@ -39,17 +40,21 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Camera Status', href: '/cameras', icon: Camera, permission: 'dashboard.view', description: 'Camera status (view-only)' },
   { label: 'Top-Up Station', href: '/topup', icon: CreditCard, permission: 'topup.create', description: 'Fast balance top-up & RFID lookup' },
   { label: 'Transport Cards', href: '/transport-cards', icon: Contact2, permission: 'card.view', description: 'RFID card registry & lifecycle' },
-  { label: 'Revenue & Reconciliation', href: '/dispatch-fees', icon: DollarSign, permission: 'fees.manage', description: 'Fee configuration & revenue' },
+  { label: 'Revenue & Reconciliation', href: '/dispatch-fees', icon: DollarSign, permission: 'fees.manage', description: 'Revenue tracking & fee reconciliation' },
+  { label: 'Revenue', href: '/dispatch-fees', icon: DollarSign, permission: 'fees.manage', description: 'Revenue & fee reconciliation' },
   { label: 'Dispatch Revenue & Fees', href: '/dispatch-fees', icon: DollarSign, permission: 'queue.view', description: 'Fee status & tariffs' },
   { label: 'Queue Management', href: '/queue', icon: ListOrdered, permission: 'queue.view', description: 'Live FIFO terminal queue' },
+  { label: 'Vehicle Dispatch', href: '/queue', icon: Send, permission: 'queue.dispatch', description: 'Vehicle clearance & departure confirmation' },
   { label: 'Violations & Incidents', href: '/violations', icon: AlertTriangle, permission: 'violations.view', description: 'Violation tracking & registration' },
   { label: 'Supervisor Overrides', href: '/overrides', icon: ShieldCheck, permission: 'overrides.approve', description: 'Supervisor approvals' },
   { label: 'ALPR Analytics', href: '/recognition/analytics', icon: BarChart3, permission: 'reports.view', description: 'ALPR accuracy metrics' },
   { label: 'Reports', href: '/reports', icon: FileBarChart, permission: 'reports.view', description: 'Operational & planning reports' },
   { label: 'Users', href: '/users', icon: Users, permission: 'users.manage', description: 'Manage user accounts' },
   { label: 'Roles & Permissions', href: '/roles', icon: Shield, permission: 'roles.manage', description: 'RBAC management' },
-  { label: 'System Settings', href: '/settings', icon: Settings, permission: 'settings.manage', description: 'System settings & integrations' },
-  { label: 'Audit Logs', href: '/audit-logs', icon: ScrollText, permission: 'audit.view', description: 'System audit log & user history' },
+  { label: 'System Settings & Integrations', href: '/settings', icon: Settings, permission: 'settings.manage', description: 'System configuration & external integrations' },
+  { label: 'System Settings', href: '/settings', icon: Settings, permission: 'settings.manage', description: 'System configuration' },
+  { label: 'Audit Logs', href: '/audit-logs', icon: ScrollText, permission: 'audit.view', description: 'System audit log & security history' },
+  { label: 'User Activity History', href: '/audit-logs', icon: Activity, permission: 'audit.view', description: 'User login & operator action logs' },
   { label: 'Device Management', href: '/devices', icon: Smartphone, permission: 'devices.manage', description: 'Handheld & gate devices' },
 ];
 
@@ -77,7 +82,7 @@ export const SUPER_ADMIN_SECTIONS: NavSection[] = [
     items: [
       { label: 'Terminals', href: '/terminals', icon: Building2, permission: 'terminals.manage', description: 'Terminal management' },
       { label: 'Routes', href: '/routes', icon: RouteIcon, permission: 'routes.manage', description: 'Route configuration' },
-      { label: 'Weekly Assignments', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: 'Weekly route planning' },
+      { label: 'Quarterly Assignments (3 Months)', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: '3-Month periodic route planning' },
     ],
   },
   {
@@ -94,7 +99,7 @@ export const SUPER_ADMIN_SECTIONS: NavSection[] = [
     items: [
       { label: 'Top-Up Station', href: '/topup', icon: CreditCard, permission: 'topup.create', description: 'Balance top-up & RFID lookup' },
       { label: 'Transport Cards', href: '/transport-cards', icon: Contact2, permission: 'card.view', description: 'RFID card registry' },
-      { label: 'Revenue & Reconciliation', href: '/dispatch-fees', icon: DollarSign, permission: 'fees.manage', description: 'Fee rules & revenue' },
+      { label: 'Revenue & Reconciliation', href: '/dispatch-fees', icon: DollarSign, permission: 'fees.manage', description: 'Revenue summary & fee reconciliation' },
     ],
   },
   {
@@ -117,8 +122,9 @@ export const SUPER_ADMIN_SECTIONS: NavSection[] = [
     items: [
       { label: 'Users', href: '/users', icon: Users, permission: 'users.manage', description: 'Manage user accounts' },
       { label: 'Roles & Permissions', href: '/roles', icon: Shield, permission: 'roles.manage', description: 'RBAC management' },
-      { label: 'System Settings', href: '/settings', icon: Settings, permission: 'settings.manage', description: 'System configuration & integrations' },
-      { label: 'Audit Logs', href: '/audit-logs', icon: ScrollText, permission: 'audit.view', description: 'System activity & audit trail' },
+      { label: 'System Settings & Integrations', href: '/settings', icon: Settings, permission: 'settings.manage', description: 'System configuration & external integrations' },
+      { label: 'Audit Logs', href: '/audit-logs', icon: ScrollText, permission: 'audit.view', description: 'Security audit trail & compliance' },
+      { label: 'User Activity History', href: '/audit-logs', icon: Activity, permission: 'audit.view', description: 'User login & operator action logs' },
       { label: 'Device Management', href: '/devices', icon: Smartphone, permission: 'devices.manage', description: 'Device management' },
     ],
   },
@@ -148,7 +154,7 @@ export const PLANNER_SECTIONS: NavSection[] = [
     items: [
       { label: 'Terminals', href: '/terminals', icon: Building2, permission: 'terminals.manage', description: 'Manage planning allocations' },
       { label: 'Routes', href: '/routes', icon: RouteIcon, permission: 'routes.manage', description: 'Create & manage routes' },
-      { label: 'Weekly Assignments', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: 'Prepare, review & publish assignments' },
+      { label: 'Quarterly Assignments (3 Months)', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: 'Prepare, review & publish 3-month assignments' },
     ],
   },
   {
@@ -181,8 +187,9 @@ export const DISPATCHER_SECTIONS: NavSection[] = [
   {
     title: 'Daily Operations',
     items: [
-      { label: 'Published Assignments', href: '/rosters', icon: CalendarDays, permission: 'queue.view', description: 'View & acknowledge published rosters' },
-      { label: 'Queue Management', href: '/queue', icon: ListOrdered, permission: 'queue.view', description: 'Live terminal queue & vehicle dispatch' },
+      { label: 'Published Assignments', href: '/rosters', icon: CalendarDays, permission: 'queue.view', badge: 'Approved', description: 'Active 3-month route rosters approved by Municipal Planner' },
+      { label: 'Queue Management', href: '/queue', icon: ListOrdered, permission: 'queue.view', description: 'Live FIFO terminal queue & vehicle check-in' },
+      { label: 'Vehicle Dispatch', href: '/queue', icon: Send, permission: 'queue.dispatch', description: 'Clearance, fee collection & departure confirmation' },
     ],
   },
   {

@@ -1,11 +1,16 @@
 export type AssignmentStatus = 'DRAFT' | 'REVIEWED' | 'PUBLISHED' | 'LOCKED' | 'ARCHIVED';
 
+/**
+ * Route assignment entity.
+ * In production municipal planning, assignments are scheduled once every 3 months (quarterly period),
+ * where weekNumber stores the Quarter / Period number (1 to 4) and weekStart / weekEnd span the 3-month cycle.
+ */
 export interface WeeklyRouteAssignment {
   id: string;
   name: string;
-  weekNumber: number;
-  weekStart: string;
-  weekEnd: string;
+  weekNumber: number; // Quarter / Period Number (1: Q1, 2: Q2, 3: Q3, 4: Q4)
+  weekStart: string;  // Start date of 3-month period
+  weekEnd: string;    // End date of 3-month period
   vehicleGroupId: string;
   vehicleGroupName: string;
   originTerminalId: string;
@@ -24,6 +29,8 @@ export interface WeeklyRouteAssignment {
   createdAt: string;
   updatedAt: string;
 }
+
+export type PeriodicRouteAssignment = WeeklyRouteAssignment;
 
 export interface AssignmentConflict {
   type: 'GROUP_ALREADY_ASSIGNED' | 'DISPATCHER_OVERBOOKED' | 'TERMINAL_MISMATCH';

@@ -23,3 +23,42 @@ export function getWeekDateRange(weekNumber: number, year: number = new Date().g
     weekEnd: weekEnd.toISOString().split('T')[0],
   };
 }
+
+/**
+ * Calculate the 3-Month Quarter / Period number for a given date (1 = Q1, 2 = Q2, 3 = Q3, 4 = Q4).
+ */
+export function getCurrentQuarter(date: Date = new Date()): number {
+  return Math.floor(date.getMonth() / 3) + 1;
+}
+
+/**
+ * Get the 3-month date range and period label for a given quarter (1 to 4) and year.
+ * Q1: Jan 1 - Mar 31
+ * Q2: Apr 1 - Jun 30
+ * Q3: Jul 1 - Sep 30
+ * Q4: Oct 1 - Dec 31
+ */
+export function getQuarterDateRange(quarter: number, year: number = new Date().getFullYear()): {
+  quarterNumber: number;
+  periodLabel: string;
+  weekStart: string;
+  weekEnd: string;
+} {
+  const q = Math.max(1, Math.min(4, quarter));
+  const startMonth = (q - 1) * 3;
+  const startDate = new Date(year, startMonth, 1);
+  startDate.setHours(0, 0, 0, 0);
+
+  // End of quarter: day 0 of (startMonth + 3) gives last day of the 3rd month
+  const endDate = new Date(year, startMonth + 3, 0);
+  endDate.setHours(23, 59, 59, 999);
+
+  const quarterLabels = ['Q1 (Jan - Mar)', 'Q2 (Apr - Jun)', 'Q3 (Jul - Sep)', 'Q4 (Oct - Dec)'];
+
+  return {
+    quarterNumber: q,
+    periodLabel: `${year} ${quarterLabels[q - 1]}`,
+    weekStart: startDate.toISOString().split('T')[0],
+    weekEnd: endDate.toISOString().split('T')[0],
+  };
+}

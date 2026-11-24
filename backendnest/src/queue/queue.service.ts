@@ -68,13 +68,18 @@ export class QueueService {
       if (currentUser.terminalId) {
         where.terminalId = currentUser.terminalId;
       }
-      // Look up active assignments for dispatcher for current active week
-      const currentWeek = require('../common/utils/date.util').getCurrentWeekNumber();
+      // Look up active assignments for dispatcher for current active 3-month period
+      const { getCurrentQuarter } = require('../common/utils/date.util');
+      const currentQuarter = getCurrentQuarter();
+      const now = new Date();
       const activeAssignments = await this.prisma.weeklyAssignment.findMany({
         where: {
-          weekNumber: currentWeek,
           status: { in: ['PUBLISHED', 'LOCKED'] },
           dispatcherIds: { has: currentUser.id },
+          OR: [
+            { weekNumber: currentQuarter },
+            { weekStart: { lte: now }, weekEnd: { gte: now } },
+          ],
         },
         select: { id: true },
       });

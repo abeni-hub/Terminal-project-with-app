@@ -125,8 +125,18 @@ export class DashboardService {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    const { getCurrentQuarter } = require('../common/utils/date.util');
+    const currentQuarter = getCurrentQuarter();
+
     const userAssignments = await this.prisma.weeklyAssignment.findMany({
-      where: { dispatcherIds: { has: userId }, status: 'PUBLISHED', weekStart: { gte: weekStart } },
+      where: {
+        dispatcherIds: { has: userId },
+        status: { in: ['PUBLISHED', 'LOCKED'] },
+        OR: [
+          { weekNumber: currentQuarter },
+          { weekStart: { lte: now }, weekEnd: { gte: now } },
+        ],
+      },
     });
 
     const assignmentIds = userAssignments.map((a) => a.id);
