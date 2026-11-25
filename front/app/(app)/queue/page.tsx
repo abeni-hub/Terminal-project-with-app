@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ColumnDef } from '@tanstack/react-table';
 import { io } from 'socket.io-client';
@@ -79,6 +79,7 @@ export default function QueuePage() {
   const [violationReviewEntry, setViolationReviewEntry] = useState<QueueEntry | null>(null);
 
   const qc = useQueryClient();
+  const recentlyNotifiedRef = useRef<Map<string, number>>(new Map());
 
   // Real-time WebSocket connection
   useEffect(() => {
@@ -89,6 +90,28 @@ export default function QueuePage() {
     socket.on('recognition:captured', (event: any) => {
       qc.invalidateQueries({ queryKey: ['queue'] });
       qc.invalidateQueries({ queryKey: ['dashboard'] });
+
+      // 1. Never show toast for DUPLICATE scans
+      if (event.processingResult === 'DUPLICATE') {
+        return;
+      }
+
+      // 2. Multi-layer Notification Debounce (TTL: 45s per gate + plate + result)
+      const notifKey = `${event.cameraType || 'ENTRY'}:${event.plateNumber}:${event.processingResult}`;
+      const now = Date.now();
+      const lastShown = recentlyNotifiedRef.current.get(notifKey) || 0;
+      if (now - lastShown < 45000) {
+        return; // Suppress duplicate toast spam
+      }
+      recentlyNotifiedRef.current.set(notifKey, now);
+
+      // Clean old cache entries
+      if (recentlyNotifiedRef.current.size > 100) {
+        for (const [k, t] of recentlyNotifiedRef.current.entries()) {
+          if (now - t > 60000) recentlyNotifiedRef.current.delete(k);
+        }
+      }
+
       if (event.processingResult === 'NOT_ASSIGNED') {
         toast.warning(`⚠ ANPR Alert: Vehicle ${event.plateNumber} detected with VIOLATION at ${event.terminalName || 'Gate'}`);
       } else if (event.cameraType === 'EXIT') {

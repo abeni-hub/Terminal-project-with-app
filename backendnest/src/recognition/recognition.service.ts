@@ -8,6 +8,8 @@ import { EventsGateway } from '../events/events.gateway';
 @Injectable()
 export class RecognitionService {
   private readonly logger = new Logger(RecognitionService.name);
+  private readonly gateCooldownCache = new Map<string, number>();
+  private readonly COOLDOWN_MS = 45000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -41,6 +43,29 @@ export class RecognitionService {
     const rawPlate = dto.plateNumber;
     const normalizedPlate = PlateNormalizer.normalize(rawPlate);
     const capturedAt = dto.capturedAt ? new Date(dto.capturedAt) : new Date();
+
+    // Event Deduplication & Cooldown: Suppress continuous video frame spam for identical entity
+    const terminalIdHint = dto.terminalId || 'DEFAULT';
+    const cooldownKey = `${terminalIdHint}:${normalizedPlate || dto.passId || 'ANON'}:${dto.cameraType || 'ENTRY'}`;
+    const nowMs = Date.now();
+    const lastSeenMs = this.gateCooldownCache.get(cooldownKey) || 0;
+
+    if (nowMs - lastSeenMs < this.COOLDOWN_MS) {
+      this.logger.debug(`[Cooldown] Suppressing duplicate scan for ${cooldownKey} (${((nowMs - lastSeenMs) / 1000).toFixed(1)}s since last event)`);
+      return {
+        success: true,
+        processingResult: 'DUPLICATE',
+        message: `Gate cooldown active: repeated frame scan suppressed for ${normalizedPlate || dto.passId}.`,
+      };
+    }
+    this.gateCooldownCache.set(cooldownKey, nowMs);
+
+    // Evict expired cooldown cache entries periodically
+    if (this.gateCooldownCache.size > 200) {
+      for (const [k, v] of this.gateCooldownCache.entries()) {
+        if (nowMs - v > 60000) this.gateCooldownCache.delete(k);
+      }
+    }
 
     this.logger.log(`Processing ALPR event: raw="${rawPlate}", normalized="${normalizedPlate}", camera="${dto.cameraId}"`);
 
@@ -99,10 +124,29 @@ export class RecognitionService {
     }
 
     // 2. Lookup Vehicle
-    const vehicle = await this.prisma.vehicle.findUnique({
+    let vehicle = await this.prisma.vehicle.findUnique({
       where: { plateNumber: normalizedPlate },
       include: { group: true },
     });
+
+    // Auto-provision guest vehicle for QR Camera pass verification (Visitor / Subscriber)
+    if (!vehicle && (dto.source === 'QR_CAMERA' || dto.passId)) {
+      const defaultGroup = await this.prisma.vehicleGroup.findFirst();
+      const groupId = defaultGroup?.id || 'group-1';
+      vehicle = await this.prisma.vehicle.create({
+        data: {
+          plateNumber: normalizedPlate || `QR-${dto.passId}`,
+          model: `${dto.passType || 'VISITOR'} Pass (${dto.passId || 'QR'})`,
+          type: 'MINIBUS_14',
+          capacity: 14,
+          status: 'WAITING',
+          journeyState: 'WAITING',
+          groupId,
+        },
+        include: { group: true },
+      });
+      this.logger.log(`Auto-provisioned guest vehicle record for QR pass ${dto.passId || normalizedPlate}`);
+    }
 
     // CASE 3: Vehicle DOES NOT EXIST in Database
     if (!vehicle) {
@@ -434,7 +478,7 @@ export class RecognitionService {
       });
 
       const mapped = this.mapEvent(dupEvent);
-      this.eventsGateway.emitRecognitionCaptured(mapped);
+      // Suppress emitRecognitionCaptured for duplicates to prevent toast spam
       return {
         success: true,
         processingResult: 'DUPLICATE',

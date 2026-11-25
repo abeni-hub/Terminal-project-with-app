@@ -29,6 +29,11 @@ from app.services.heartbeat_runner import HeartbeatRunner
 from app.detection.plate_detector import PlateDetector
 from app.ocr.recognizer import OCRRecognizer
 from app.qr.qr_scanner import QRScanner, GateFlowManager, QRPayloadParser, GateDirection, GateAuditLogger, GateDecision
+from app.qr.qr_repository import QRRepository, QRPassRecord, QRAuditLogRecord
+from app.qr.qr_manager import QRManager
+from dataclasses import asdict
+from datetime import datetime, timezone, timedelta
+import json
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("RecognitionService")
@@ -55,6 +60,8 @@ single_plate_detector = PlateDetector()
 single_ocr_recognizer = OCRRecognizer()
 global_qr_scanner = QRScanner(throttle_interval=1)
 global_gate_flow = GateFlowManager()
+global_qr_repo = QRRepository()
+global_qr_manager = QRManager(repository=global_qr_repo)
 
 class StartCameraRequest(BaseModel):
     cameraId: str
@@ -226,13 +233,25 @@ async def gate_decision(payload: Dict[str, Any] = Body(...)):
     direction = GateDirection.ENTRY if direction_str == "ENTRY" else GateDirection.EXIT
     camera_id = payload.get("cameraId", "CAM-01")
 
-    decision = global_gate_flow.evaluate_gate_access(
-        ocr_plate=plate,
-        ocr_confidence=conf,
-        qr_input=qr_data,
-        direction=direction,
-        camera_id=camera_id,
-    )
+    # If QR data provided, evaluate with full lifecycle repository first
+    if qr_data:
+        decision = global_qr_manager.verify_and_consume_gate_pass(
+            raw_qr_input=str(qr_data),
+            detected_plate=plate,
+            detected_confidence=conf,
+            direction=direction,
+            gate_id=camera_id,
+        )
+        # Mirror to gate flow audit logger for consistency
+        global_gate_flow.audit_logger.log_access(decision)
+    else:
+        decision = global_gate_flow.evaluate_gate_access(
+            ocr_plate=plate,
+            ocr_confidence=conf,
+            qr_input=None,
+            direction=direction,
+            camera_id=camera_id,
+        )
     return decision.to_dict()
 
 @app.get("/gate-audit-logs")
@@ -242,6 +261,171 @@ def get_gate_audit_logs(limit: int = 50):
     return {
         "total": len(logs),
         "logs": logs,
+    }
+
+# -------------------------------------------------------------
+# QR Pass Lifecycle Management Endpoints (CRUD + Generator)
+# -------------------------------------------------------------
+
+@app.post("/qr-passes")
+async def create_qr_pass(payload: Dict[str, Any] = Body(...)):
+    """Issues a new cryptographically signed vehicle QR pass with rendered PNG image."""
+    plate_number = payload.get("plateNumber") or payload.get("plate_number") or ""
+    pass_type = payload.get("passType") or payload.get("pass_type") or "SUBSCRIBER"
+    holder_name = payload.get("holderName") or payload.get("holder_name") or "Fleet Vehicle"
+    account_id = payload.get("accountId") or payload.get("account_id")
+    duration_days = int(payload.get("durationDays") or payload.get("duration_days") or 90)
+    max_uses = int(payload.get("maxUses") if "maxUses" in payload else (payload.get("max_uses") if "max_uses" in payload else (0 if pass_type.upper() == "SUBSCRIBER" else 1)))
+    custom_pass_id = payload.get("passId") or payload.get("pass_id")
+    operator_id = payload.get("operatorId") or "ADMIN"
+    metadata = payload.get("metadata")
+
+    result = global_qr_manager.issue_pass(
+        plate_number=plate_number,
+        pass_type=pass_type,
+        holder_name=holder_name,
+        account_id=account_id,
+        duration_days=duration_days,
+        max_uses=max_uses,
+        custom_pass_id=custom_pass_id,
+        operator_id=operator_id,
+        metadata=metadata,
+    )
+    return {"success": True, "pass": result}
+
+@app.post("/qr-passes/batch")
+async def batch_create_qr_passes(payload: Dict[str, Any] = Body(...)):
+    """Batch issues multiple vehicle QR passes from JSON array."""
+    passes_data = payload.get("passes") or []
+    operator_id = payload.get("operatorId") or "ADMIN"
+    results = global_qr_manager.batch_issue_passes(passes_data, operator_id=operator_id)
+    return {"success": True, "count": len(results), "passes": results}
+
+@app.get("/qr-passes")
+def list_qr_passes(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    pass_type: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Lists/searches QR passes with status & type filtering."""
+    passes = global_qr_repo.list_passes(search=search, status=status, pass_type=pass_type, limit=limit, offset=offset)
+    return {
+        "success": True,
+        "total": len(passes),
+        "passes": [asdict(p) for p in passes],
+    }
+
+@app.get("/qr-passes/{pass_id}")
+def get_qr_pass_detail(pass_id: str):
+    """Retrieves full QR pass record, rendered QR image data URI, and audit trail."""
+    p = global_qr_repo.get_pass(pass_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"QR Pass [{pass_id}] not found")
+
+    sig = global_qr_manager._sign_payload(p.pass_id, p.plate_number, p.pass_type, p.expires_at)
+    canonical_payload = json.dumps({
+        "pass_id": p.pass_id,
+        "plate_number": p.plate_number or None,
+        "pass_type": p.pass_type,
+        "expires_at": p.expires_at,
+        "sig": sig,
+    }, separators=(",", ":"))
+    _, b64_uri = global_qr_manager.render_qr_image(canonical_payload)
+    logs = global_qr_repo.get_audit_logs(pass_id=pass_id, limit=20)
+
+    return {
+        "success": True,
+        "pass": asdict(p),
+        "payload_json": canonical_payload,
+        "qr_image_data_uri": b64_uri,
+        "audit_logs": [asdict(l) for l in logs],
+    }
+
+@app.get("/qr-passes/{pass_id}/image")
+def get_qr_pass_image(pass_id: str):
+    """Returns downloadable/renderable high-contrast PNG image of the QR pass."""
+    p = global_qr_repo.get_pass(pass_id)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"QR Pass [{pass_id}] not found")
+
+    sig = global_qr_manager._sign_payload(p.pass_id, p.plate_number, p.pass_type, p.expires_at)
+    canonical_payload = json.dumps({
+        "pass_id": p.pass_id,
+        "plate_number": p.plate_number or None,
+        "pass_type": p.pass_type,
+        "expires_at": p.expires_at,
+        "sig": sig,
+    }, separators=(",", ":"))
+    png_bytes, _ = global_qr_manager.render_qr_image(canonical_payload)
+    return Response(content=png_bytes, media_type="image/png")
+
+@app.post("/qr-passes/{pass_id}/renew")
+async def renew_qr_pass(pass_id: str, payload: Dict[str, Any] = Body(...)):
+    """Renews or extends the expiration date of an existing pass."""
+    new_expires_at = payload.get("expiresAt") or payload.get("expires_at")
+    days_to_add = int(payload.get("daysToAdd") or payload.get("days_to_add") or 30)
+    if not new_expires_at:
+        new_dt = datetime.now(timezone.utc) + timedelta(days=days_to_add)
+        new_expires_at = new_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    operator_id = payload.get("operatorId") or "ADMIN"
+    reason = payload.get("reason") or f"Extended validity by {days_to_add} days"
+
+    updated = global_qr_repo.renew_pass(pass_id, new_expires_at, operator_id=operator_id, reason=reason)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"QR Pass [{pass_id}] not found")
+    return {"success": True, "pass": asdict(updated)}
+
+@app.post("/qr-passes/{pass_id}/reassign")
+async def reassign_qr_pass_plate(pass_id: str, payload: Dict[str, Any] = Body(...)):
+    """Reassigns a QR pass to a different vehicle license plate."""
+    new_plate = payload.get("newPlate") or payload.get("plateNumber") or payload.get("plate_number")
+    if not new_plate:
+        raise HTTPException(status_code=400, detail="newPlate is required")
+
+    operator_id = payload.get("operatorId") or "ADMIN"
+    reason = payload.get("reason") or "Vehicle fleet plate reassignment"
+
+    updated = global_qr_repo.reassign_plate(pass_id, new_plate, operator_id=operator_id, reason=reason)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"QR Pass [{pass_id}] not found")
+    return {"success": True, "pass": asdict(updated)}
+
+@app.post("/qr-passes/{pass_id}/status")
+async def change_qr_pass_status(pass_id: str, payload: Dict[str, Any] = Body(...)):
+    """Changes pass status to ACTIVE, SUSPENDED, or REVOKED."""
+    new_status = payload.get("status")
+    if not new_status or new_status.upper() not in ["ACTIVE", "SUSPENDED", "REVOKED"]:
+        raise HTTPException(status_code=400, detail="status must be one of: ACTIVE, SUSPENDED, REVOKED")
+
+    operator_id = payload.get("operatorId") or "ADMIN"
+    reason = payload.get("reason") or f"Status set to {new_status}"
+
+    updated = global_qr_repo.update_status(pass_id, new_status, operator_id=operator_id, reason=reason)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"QR Pass [{pass_id}] not found")
+    return {"success": True, "pass": asdict(updated)}
+
+@app.get("/qr-passes-export")
+def export_qr_passes_csv(search: Optional[str] = None, status: Optional[str] = None):
+    """Exports passes to CSV format."""
+    csv_str = global_qr_manager.export_passes_csv(search=search, status=status)
+    return Response(
+        content=csv_str,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=qr_passes_export.csv"},
+    )
+
+@app.get("/qr-lifecycle-logs")
+def get_qr_lifecycle_logs(pass_id: Optional[str] = None, limit: int = 50):
+    """Returns immutable lifecycle audit logs for QR passes."""
+    logs = global_qr_repo.get_audit_logs(pass_id=pass_id, limit=limit)
+    return {
+        "success": True,
+        "total": len(logs),
+        "logs": [asdict(l) for l in logs],
     }
 
 @app.on_event("startup")

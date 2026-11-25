@@ -16,6 +16,15 @@ from app.qr.qr_scanner import (
     GateFlowManager,
 )
 
+from app.qr.qr_repository import (
+    QRRepository,
+    QRPassRecord,
+    QRAuditLogRecord,
+)
+from app.qr.qr_manager import (
+    QRManager,
+)
+
 __all__ = [
     "PassType",
     "ValidationStatus",
@@ -31,4 +40,8 @@ __all__ = [
     "QRScanner",
     "GateAuditLogger",
     "GateFlowManager",
+    "QRRepository",
+    "QRPassRecord",
+    "QRAuditLogRecord",
+    "QRManager",
 ]

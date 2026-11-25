@@ -68,6 +68,10 @@ class RecognitionWorker:
         self.track_consensus_cache: Dict[int, Tuple[str, float, bool]] = {}
         self.track_sent_time: Dict[int, float] = {}
 
+        # Gate Event Cooldown & Deduplication Registry (per entity plate / pass_id)
+        self.entity_cooldown: Dict[str, float] = {}
+        self.COOLDOWN_SECONDS: float = 45.0
+
         # Recognized & Unknown Plates Categorization Registry
         self.unknown_plates: List[Dict[str, Any]] = []
         self.eligible_plates: List[Dict[str, Any]] = []
@@ -114,6 +118,10 @@ class RecognitionWorker:
         v_crop: np.ndarray,
         p_crop: np.ndarray,
         vehicle_class: str,
+        source: Optional[str] = None,
+        pass_id: Optional[str] = None,
+        pass_type: Optional[str] = None,
+        match_status: Optional[str] = None,
     ):
         """Background thread worker for saving images and sending NestJS API dispatch."""
         try:
@@ -138,6 +146,10 @@ class RecognitionWorker:
                 vehicle_image=v_b64,
                 plate_image=p_b64,
                 image_path=plate_path or "",
+                source=source or "ANPR_CAMERA",
+                pass_id=pass_id,
+                pass_type=pass_type,
+                match_status=match_status,
             )
 
             is_eligible = res.get("isEligible", True) if isinstance(res, dict) else True
@@ -164,6 +176,35 @@ class RecognitionWorker:
                 logger.warning(f"🚨 [CAM: {self.camera_id}] UNKNOWN/UNREGISTERED Plate: {plate_text} -> Added to Unknown List")
         except Exception as e:
             logger.error(f"Async ANPR dispatch error: {e}")
+
+    def _async_dispatch_qr(
+        self,
+        pass_id: str,
+        plate_text: str,
+        pass_type: str,
+        decision: GateDecision,
+    ):
+        """Background thread worker for dispatching verified camera QR pass to NestJS queue."""
+        try:
+            timestamp_iso = datetime.datetime.utcnow().isoformat() + "Z"
+            res = self.nestjs_client.send_recognition_event(
+                camera_id=self.camera_id,
+                terminal_id=self.terminal_id,
+                camera_type=self.camera_type,
+                plate_number=plate_text or f"QR-{pass_id}",
+                confidence=0.98,
+                captured_at=timestamp_iso,
+                track_id=1,
+                vehicle_type="minibus",
+                direction=self.camera_type,
+                source="QR_CAMERA",
+                pass_id=pass_id,
+                pass_type=pass_type,
+                match_status=decision.match_status.value,
+            )
+            logger.info(f"📋 [CAM: {self.camera_id}] Auto-routed QR Pass {pass_id} ({plate_text}) to Incoming Pending Queue: {res.get('status')}")
+        except Exception as e:
+            logger.error(f"Async QR dispatch error: {e}")
 
     def _run_loop(self):
         self.provider.connect()
@@ -205,7 +246,12 @@ class RecognitionWorker:
                 # If no vehicle detected but valid QR pass present: Evaluate QR-Only access
                 if not tracked_vehicles and qr_result and qr_result.found:
                     now = time.time()
-                    if now - self.last_qr_gate_decision_time > 3.0:
+                    t_id_val = qr_result.validation.payload.ticket_id if qr_result.validation and qr_result.validation.payload else "QR"
+                    p_type_val = qr_result.validation.payload.pass_type.value if qr_result.validation and qr_result.validation.payload and qr_result.validation.payload.pass_type else "VISITOR"
+                    qr_plate_val = qr_result.validation.payload.plate_number if qr_result.validation and qr_result.validation.payload else ""
+                    qr_cooldown_key = f"{self.camera_id}:QR:{t_id_val}"
+
+                    if now - self.entity_cooldown.get(qr_cooldown_key, 0) >= self.COOLDOWN_SECONDS:
                         direction = GateDirection.ENTRY if self.camera_type == "ENTRY" else GateDirection.EXIT
                         decision = self.gate_flow_manager.evaluate_gate_access(
                             ocr_plate="",
@@ -215,7 +261,11 @@ class RecognitionWorker:
                             camera_id=self.camera_id,
                         )
                         self.latest_gate_decision = decision
-                        self.last_qr_gate_decision_time = now
+                        self.entity_cooldown[qr_cooldown_key] = now
+                        if qr_plate_val:
+                            self.entity_cooldown[f"{self.camera_id}:PLATE:{qr_plate_val}"] = now
+                        if decision.action in [GateAction.OPEN, GateAction.HOLD]:
+                            self.executor.submit(self._async_dispatch_qr, t_id_val, qr_plate_val or "", p_type_val, decision)
                         logger.info(f"🚪 [CAM: {self.camera_id}] QR-Only Gate Action: {decision.action.value} ({decision.reason})")
 
                 for vehicle in tracked_vehicles:
@@ -289,27 +339,45 @@ class RecognitionWorker:
                             )
                             self.latest_gate_decision = decision
 
+                            # Step 8: Multi-layer Cooldown Deduplication
+                            plate_cooldown_key = f"{self.camera_id}:PLATE:{plate_text}"
+                            is_in_cooldown = (now - self.entity_cooldown.get(plate_cooldown_key, 0)) < self.COOLDOWN_SECONDS
+
                             # Draw Plate Box & Status Banner
                             cv2.rectangle(display_frame, (abs_px, abs_py), (abs_px + pw, abs_py + ph), box_color, 3)
                             banner = f"{status_label}: {plate_text} ({int(confidence * 100)}%)"
+                            if is_in_cooldown:
+                                banner += " [COOLDOWN]"
                             cv2.putText(display_frame, banner, (abs_px, max(abs_py - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, box_color, 2)
 
-                            # Step 8: Record capture & set 3-second cooldown
                             self.sent_track_ids.add(track_id)
                             self.track_sent_time[track_id] = now
                             self.track_consensus_cache[track_id] = (plate_text, consensus_conf or confidence, is_eligible)
                             self.last_recognized_plate = plate_text
 
-                            # Offload image saving & HTTP reporting to ThreadPool
-                            self.executor.submit(
-                                self._async_save_and_dispatch,
-                                track_id,
-                                plate_text,
-                                consensus_conf or confidence,
-                                v_crop,
-                                p_crop,
-                                vehicle.class_name,
-                            )
+                            if not is_in_cooldown:
+                                self.entity_cooldown[plate_cooldown_key] = now
+                                t_id_active = None
+                                p_type_active = None
+                                if active_qr and active_qr.validation and active_qr.validation.payload:
+                                    t_id_active = active_qr.validation.payload.ticket_id
+                                    p_type_active = active_qr.validation.payload.pass_type.value if active_qr.validation.payload.pass_type else None
+                                    self.entity_cooldown[f"{self.camera_id}:QR:{t_id_active}"] = now
+
+                                # Offload image saving & HTTP reporting to ThreadPool (ONCE per cooldown period)
+                                self.executor.submit(
+                                    self._async_save_and_dispatch,
+                                    track_id,
+                                    plate_text,
+                                    consensus_conf or confidence,
+                                    v_crop,
+                                    p_crop,
+                                    vehicle.class_name,
+                                    "QR_CAMERA" if active_qr else "ANPR_CAMERA",
+                                    t_id_active,
+                                    p_type_active,
+                                    decision.match_status.value if decision else None,
+                                )
 
 
                 # Top Live HUD Banner with FPS Counter

@@ -40,6 +40,26 @@ export class ProcessRecognitionDto {
   @IsString()
   @IsOptional()
   imagePath?: string;
+
+  @ApiPropertyOptional({ example: 'QR_CAMERA' })
+  @IsString()
+  @IsOptional()
+  source?: string;
+
+  @ApiPropertyOptional({ example: 'PASS-SUB-101' })
+  @IsString()
+  @IsOptional()
+  passId?: string;
+
+  @ApiPropertyOptional({ example: 'SUBSCRIBER' })
+  @IsString()
+  @IsOptional()
+  passType?: string;
+
+  @ApiPropertyOptional({ example: 'MATCHED' })
+  @IsString()
+  @IsOptional()
+  matchStatus?: string;
 }
 
 export class AssignUnknownPlateDto {

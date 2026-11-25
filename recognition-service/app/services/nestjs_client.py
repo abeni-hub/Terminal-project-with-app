@@ -48,6 +48,10 @@ class NestJSClient:
         vehicle_image: Optional[str] = None,
         plate_image: Optional[str] = None,
         image_path: Optional[str] = None,
+        source: Optional[str] = None,
+        pass_id: Optional[str] = None,
+        pass_type: Optional[str] = None,
+        match_status: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Sends complete ANPR recognition event POST payload to NestJS backend.
@@ -69,6 +73,10 @@ class NestJSClient:
             "vehicleImage": vehicle_image or "",
             "plateImage": plate_image or "",
             "imagePath": image_path or "",
+            "source": source or ("QR_CAMERA" if pass_id else "ANPR_CAMERA"),
+            "passId": pass_id or "",
+            "passType": pass_type or "",
+            "matchStatus": match_status or "",
         }
 
         try:

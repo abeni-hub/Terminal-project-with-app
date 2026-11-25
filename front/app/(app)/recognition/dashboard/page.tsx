@@ -59,6 +59,7 @@ export default function RecognitionDashboardPage() {
     socket.on('disconnect', () => setConnected(false));
 
     socket.on('recognition:captured', (event: RecognitionEvent) => {
+      if (event.processingResult === 'DUPLICATE') return;
       setEvents((prev) => [event, ...prev.slice(0, 24)]);
       setStats((prev: any) => ({ ...prev, totalEvents: prev.totalEvents + 1 }));
     });
