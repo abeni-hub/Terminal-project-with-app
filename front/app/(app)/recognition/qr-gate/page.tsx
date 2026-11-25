@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { useAuthStore } from '@/src/store/auth-store';
 
 interface GateDecisionResponse {
   action: 'OPEN' | 'HOLD' | 'REJECT';
@@ -32,6 +33,15 @@ interface GateDecisionResponse {
   timestamp?: string;
   audit_id?: number;
   details?: Record<string, any>;
+  queue_dispatch?: {
+    success?: boolean;
+    error?: string;
+    data?: {
+      processingResult?: string;
+      message?: string;
+      queueEntry?: any;
+    };
+  };
 }
 
 interface AuditLogItem {
@@ -63,6 +73,7 @@ interface QRPassItem {
 }
 
 export default function QRGateScannerPage() {
+  const session = useAuthStore((s) => s.session);
   const [activeTab, setActiveTab] = useState<'gate' | 'generator' | 'logs'>('gate');
 
   // Gate clearance states
@@ -228,6 +239,7 @@ export default function QRGateScannerPage() {
             confidence: targetPlate ? parseFloat(ocrConfidence) || 0.92 : 0.0,
             qrCode: targetQr,
             direction: direction,
+            terminalId: session?.user?.terminalId || undefined,
           }),
         });
 
@@ -246,7 +258,7 @@ export default function QRGateScannerPage() {
         setLoading(false);
       }
     },
-    [qrPayload, plateNumber, ocrConfidence, direction]
+    [qrPayload, plateNumber, ocrConfidence, direction, session?.user?.terminalId]
   );
 
   // Handle a newly decoded QR string from live camera or image upload
@@ -860,8 +872,28 @@ export default function QRGateScannerPage() {
                       </div>
 
                       {lastDecision.action === 'OPEN' && (
-                        <div className="p-2 rounded bg-emerald-500/10 text-emerald-700 text-xs font-semibold flex items-center justify-center gap-1.5 border border-emerald-200">
-                          <Check className="h-4 w-4" /> Auto-routed to Incoming Pending Tab in Queue
+                        <div
+                          className={`p-2 rounded text-xs font-semibold flex items-center justify-center gap-1.5 border ${
+                            lastDecision.queue_dispatch?.success === false
+                              ? 'bg-amber-500/10 text-amber-700 border-amber-200'
+                              : 'bg-emerald-500/10 text-emerald-700 border-emerald-200'
+                          }`}
+                        >
+                          {lastDecision.queue_dispatch?.success === false ? (
+                            <>
+                              <AlertTriangle className="h-4 w-4 shrink-0" />
+                              <span>
+                                Queue Dispatch Notice: {lastDecision.queue_dispatch?.error || 'Could not contact dispatch backend'}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <Check className="h-4 w-4 shrink-0" />
+                              <span>
+                                {lastDecision.queue_dispatch?.data?.message || 'Auto-routed to Incoming Pending Tab in Queue'}
+                              </span>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

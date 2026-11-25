@@ -92,11 +92,12 @@ class NestJSClient:
                     "data": res_data
                 }
             else:
+                logger.warning(f"NestJS returned HTTP {response.status_code} from {url}: {response.text[:300]}")
                 return {
                     "success": False,
                     "isEligible": False,
                     "status": "UNREGISTERED",
-                    "error": f"HTTP {response.status_code}"
+                    "error": f"HTTP {response.status_code}: {response.text[:200]}"
                 }
         except Exception as e:
             logger.warning(f"NestJS connection note ({url}): {e}. Treating as unverified check.")

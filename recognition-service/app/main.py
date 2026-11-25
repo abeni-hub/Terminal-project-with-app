@@ -2,6 +2,7 @@ import sys
 import os
 import cv2
 import time
+import asyncio
 import logging
 from typing import Dict, Optional, List, Any
 
@@ -238,17 +239,18 @@ async def scan_qr(request: Request):
 
 def _dispatch_qr_gate_to_nestjs(
     camera_id: str,
+    terminal_id: str,
     direction_str: str,
     plate_num: str,
     pass_id: Optional[str],
     pass_type: Optional[str],
     match_status: Optional[str],
-):
+) -> Dict[str, Any]:
     """Forwards verified OPEN QR gate decisions into NestJS Incoming Pending queue."""
     try:
-        nestjs_client.send_recognition_event(
+        return nestjs_client.send_recognition_event(
             camera_id=camera_id,
-            terminal_id="terminal-demo",
+            terminal_id=terminal_id or "terminal-demo",
             camera_type=direction_str,
             plate_number=plate_num or f"QR-{pass_id or 'PASS'}",
             confidence=0.98,
@@ -262,10 +264,11 @@ def _dispatch_qr_gate_to_nestjs(
             match_status=match_status,
         )
     except Exception as e:
-        logger.warning(f"Background NestJS queue dispatch warning: {e}")
+        logger.warning(f"NestJS queue dispatch warning: {e}")
+        return {"success": False, "error": str(e)}
 
 @app.post("/gate-decision")
-async def gate_decision(background_tasks: BackgroundTasks, payload: Dict[str, Any] = Body(...)):
+async def gate_decision(payload: Dict[str, Any] = Body(...)):
     """
     Direct Gate Reconciliation Endpoint.
     Reconciles Plate OCR and/or QR token and outputs definitive gate command (OPEN, HOLD, REJECT).
@@ -277,6 +280,7 @@ async def gate_decision(background_tasks: BackgroundTasks, payload: Dict[str, An
         direction_str = str(payload.get("direction", "ENTRY")).upper()
         direction = GateDirection.ENTRY if direction_str == "ENTRY" else GateDirection.EXIT
         camera_id = payload.get("cameraId", "CAM-01")
+        terminal_id = payload.get("terminalId") or "terminal-demo"
 
         # If QR data provided, route according to pass registration status
         if qr_data:
@@ -332,18 +336,20 @@ async def gate_decision(background_tasks: BackgroundTasks, payload: Dict[str, An
 
         res_dict = decision.to_dict()
 
-        # Auto-populate NestJS "Incoming Pending" queue on verified OPEN clearance
+        # Auto-populate NestJS "Incoming Pending" queue synchronously so DB write commits before response
         act = res_dict.get("action")
         if act == GateAction.OPEN.value or act == "OPEN":
-            background_tasks.add_task(
+            queue_res = await asyncio.to_thread(
                 _dispatch_qr_gate_to_nestjs,
                 camera_id=camera_id,
+                terminal_id=terminal_id,
                 direction_str=direction_str,
                 plate_num=res_dict.get("plate_number") or plate or "",
                 pass_id=res_dict.get("ticket_id"),
                 pass_type=res_dict.get("pass_type"),
                 match_status=res_dict.get("match_status"),
             )
+            res_dict["queue_dispatch"] = queue_res
 
         return res_dict
     except HTTPException:

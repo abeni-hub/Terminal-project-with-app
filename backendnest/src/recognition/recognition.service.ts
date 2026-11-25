@@ -67,29 +67,78 @@ export class RecognitionService {
       }
     }
 
-    this.logger.log(`Processing ALPR event: raw="${rawPlate}", normalized="${normalizedPlate}", camera="${dto.cameraId}"`);
+    this.logger.log(`Processing ALPR event: raw="${rawPlate}", normalized="${normalizedPlate}", camera="${dto.cameraId}", source="${dto.source || 'ANPR'}"`);
 
-    // 1. Lookup Camera
-    const camera = await this.prisma.cameraDevice.findFirst({
-      where: {
-        OR: [{ id: dto.cameraId }, { code: dto.cameraId }],
-      },
-      include: { terminal: true },
-    });
+    try {
+      // 1. Lookup Camera & Terminal safely (prevent FK violations when virtual/webcam IDs are sent)
+      let camera = await this.prisma.cameraDevice.findFirst({
+        where: {
+          OR: [{ id: dto.cameraId }, { code: dto.cameraId }],
+        },
+        include: { terminal: true },
+      });
 
-    const terminalId = camera ? camera.terminalId : dto.terminalId;
-    const terminal = await this.prisma.terminal.findUnique({ where: { id: terminalId } });
+      let terminalId = camera ? camera.terminalId : dto.terminalId;
+      let terminal = terminalId
+        ? await this.prisma.terminal.findUnique({ where: { id: terminalId } })
+        : null;
 
-    if (!camera) {
-      this.logger.warn(`Camera ID ${dto.cameraId} not registered in DB`);
-    } else if (!camera.recognitionEnabled) {
-      this.logger.log(`Camera ${camera.name} has recognition disabled.`);
-      return {
-        success: false,
-        processingResult: 'DISABLED',
-        message: 'Recognition disabled for this camera.',
-      };
-    }
+      if (!terminal) {
+        terminal = await this.prisma.terminal.findFirst({
+          orderBy: { createdAt: 'asc' },
+        });
+        if (!terminal) {
+          terminal = await this.prisma.terminal.create({
+            data: {
+              name: 'Main Terminal',
+              code: 'MAIN-TERM',
+              address: 'Addis Ababa',
+              latitude: 9.03,
+              longitude: 38.74,
+              capacity: 100,
+            },
+          });
+        }
+        terminalId = terminal.id;
+      }
+
+      if (!camera) {
+        this.logger.warn(`Camera ID ${dto.cameraId} not registered in DB — using fallback camera for terminal ${terminalId}`);
+        camera =
+          (await this.prisma.cameraDevice.findFirst({
+            where: { terminalId, cameraType: (dto.cameraType as any) === 'EXIT' ? 'EXIT' : 'ENTRY' },
+            include: { terminal: true },
+          })) ||
+          (await this.prisma.cameraDevice.findFirst({
+            where: { terminalId },
+            include: { terminal: true },
+          }));
+
+        if (!camera) {
+          camera = await this.prisma.cameraDevice.create({
+            data: {
+              name: `QR Gate Camera (${dto.cameraId || 'CAM-01'})`,
+              code: dto.cameraId || `CAM-QR-${terminalId.slice(0, 6)}`,
+              terminalId,
+              gateName: 'Main Gate',
+              cameraType: (dto.cameraType as any) === 'EXIT' ? 'EXIT' : 'ENTRY',
+              sourceType: 'USB',
+              sourceAddress: '0',
+              recognitionEnabled: true,
+            },
+            include: { terminal: true },
+          });
+        }
+      } else if (!camera.recognitionEnabled) {
+        this.logger.log(`Camera ${camera.name} has recognition disabled.`);
+        return {
+          success: false,
+          processingResult: 'DISABLED',
+          message: 'Recognition disabled for this camera.',
+        };
+      }
+
+      const effectiveCameraId = camera.id;
 
     // Check terminal recognition config min confidence (default 0.40 to allow medium confidence scans)
     const config = await this.prisma.recognitionConfiguration.findUnique({ where: { terminalId } });
@@ -98,7 +147,7 @@ export class RecognitionService {
     if (dto.confidence < minConfidence) {
       const lowConfEvent = await this.prisma.recognitionEvent.create({
         data: {
-          cameraId: camera?.id || dto.cameraId,
+          cameraId: effectiveCameraId,
           terminalId,
           cameraType: dto.cameraType || camera?.cameraType || 'ENTRY',
           plateNumber: normalizedPlate,
@@ -123,14 +172,21 @@ export class RecognitionService {
       };
     }
 
-    // 2. Lookup Vehicle
-    let vehicle: any = await this.prisma.vehicle.findUnique({
-      where: { plateNumber: normalizedPlate },
+    const isQrCameraPass = dto.source === 'QR_CAMERA' || Boolean(dto.passId);
+
+    // 2. Lookup Vehicle (match normalized OR raw formatted plate like AA-00215)
+    let vehicle: any = await this.prisma.vehicle.findFirst({
+      where: {
+        OR: [
+          { plateNumber: normalizedPlate },
+          ...(rawPlate ? [{ plateNumber: rawPlate.trim().toUpperCase() }] : []),
+        ],
+      },
       include: { group: true },
     });
 
     // Auto-provision guest vehicle for QR Camera pass verification (Visitor / Subscriber)
-    if (!vehicle && (dto.source === 'QR_CAMERA' || dto.passId)) {
+    if (!vehicle && isQrCameraPass) {
       let defaultGroup = await this.prisma.vehicleGroup.findFirst();
       if (!defaultGroup) {
         defaultGroup = await this.prisma.vehicleGroup.create({
@@ -162,7 +218,7 @@ export class RecognitionService {
       this.logger.warn(`Vehicle ${normalizedPlate} NOT found in database.`);
       const unknownEvent = await this.prisma.recognitionEvent.create({
         data: {
-          cameraId: camera?.id || dto.cameraId,
+          cameraId: effectiveCameraId,
           terminalId,
           cameraType: dto.cameraType || camera?.cameraType || 'ENTRY',
           plateNumber: normalizedPlate,
@@ -192,7 +248,7 @@ export class RecognitionService {
     if (vehicle.status === 'OFFLINE') {
       const suspendedEvent = await this.prisma.recognitionEvent.create({
         data: {
-          cameraId: camera?.id || dto.cameraId,
+          cameraId: effectiveCameraId,
           terminalId,
           cameraType: dto.cameraType || camera?.cameraType || 'ENTRY',
           plateNumber: normalizedPlate,
@@ -383,7 +439,7 @@ export class RecognitionService {
           where: { id: activeQueue.id },
           data: {
             status: 'DETECTED_AT_EXIT',
-            exitCameraId: camera?.id || dto.cameraId,
+            exitCameraId: effectiveCameraId,
             exitCapturedAt: capturedAt,
             isViolation: !isAuthorizedDispatch ? true : activeQueue.isViolation,
             violationRemark: violationRemark || activeQueue.violationRemark,
@@ -399,7 +455,7 @@ export class RecognitionService {
 
       const exitEvent = await this.prisma.recognitionEvent.create({
         data: {
-          cameraId: camera?.id || dto.cameraId,
+          cameraId: effectiveCameraId,
           terminalId,
           cameraType: 'EXIT',
           plateNumber: normalizedPlate,
@@ -458,6 +514,31 @@ export class RecognitionService {
       },
     });
 
+    if (alreadyInQueue && alreadyInQueue.isViolation && isQrCameraPass) {
+      const upgraded = await this.prisma.queueEntry.update({
+        where: { id: alreadyInQueue.id },
+        data: {
+          isViolation: false,
+          entryType: 'AUTO_RECOGNIZED',
+          checkedInBy: dto.passId
+            ? `QR Gate (${dto.passType || 'PASS'}: ${dto.passId})`
+            : alreadyInQueue.checkedInBy,
+          violationRemark: null,
+        },
+      });
+      this.eventsGateway.emitQueueUpdated({
+        type: 'CHECK_IN',
+        queueEntry: upgraded,
+        terminalId,
+      });
+      return {
+        success: true,
+        processingResult: 'ACCEPTED',
+        queueEntry: upgraded,
+        message: `Vehicle ${normalizedPlate} cleared via QR Gate and moved to Incoming Pending queue.`,
+      };
+    }
+
     const recentScan = await this.prisma.recognitionEvent.findFirst({
       where: {
         plateNumber: normalizedPlate,
@@ -467,10 +548,10 @@ export class RecognitionService {
       },
     });
 
-    if (alreadyInQueue || recentScan) {
+    if (alreadyInQueue || (recentScan && !isQrCameraPass)) {
       const dupEvent = await this.prisma.recognitionEvent.create({
         data: {
-          cameraId: camera?.id || dto.cameraId,
+          cameraId: effectiveCameraId,
           terminalId,
           cameraType: 'ENTRY',
           plateNumber: normalizedPlate,
@@ -527,9 +608,34 @@ export class RecognitionService {
       });
     }
 
-    // CASE 1: Vehicle Exists AND Correctly Assigned to current terminal's weekly roster
-    if (activeAssignments.length > 0) {
-      const assignment = activeAssignments[0];
+    // CASE 1: Vehicle Assigned OR Verified QR Gate Pass (Auto-queue to Incoming Pending with isViolation=false)
+    if (activeAssignments.length > 0 || isQrCameraPass) {
+      let assignment = activeAssignments[0];
+      if (!assignment) {
+        assignment =
+          (await this.prisma.weeklyAssignment.findFirst({
+            where: { OR: [{ originTerminalId: terminalId }, { destinationTerminalId: terminalId }] },
+          })) ||
+          (await this.prisma.weeklyAssignment.findFirst());
+
+        if (!assignment) {
+          const otherTerm = await this.prisma.terminal.findFirst({ where: { id: { not: terminalId } } });
+          assignment = await this.prisma.weeklyAssignment.create({
+            data: {
+              name: 'QR Gate General Entry',
+              weekNumber: currentQuarter,
+              weekStart: now,
+              weekEnd: new Date(now.getTime() + 90 * 24 * 3600 * 1000),
+              vehicleGroupId: vehicle.groupId,
+              originTerminalId: terminalId,
+              destinationTerminalId: otherTerm?.id || terminalId,
+              dispatcherIds: [],
+              status: 'PUBLISHED',
+            },
+          });
+        }
+      }
+
       const checkOutTerminalId =
         assignment.originTerminalId === terminalId
           ? assignment.destinationTerminalId
@@ -539,14 +645,18 @@ export class RecognitionService {
 
       // Count position in waiting queue
       const waitingCount = await this.prisma.queueEntry.count({
-        where: { assignmentId: assignment.id, terminalId, status: 'WAITING' },
+        where: { terminalId, status: 'WAITING' },
       });
       const position = waitingCount + 1;
+
+      const recRemarks = isQrCameraPass
+        ? `QR Gate verified (${dto.passType || 'PASS'}${dto.passId ? ` #${dto.passId}` : ''}). Auto-queued to Incoming Pending.`
+        : `Valid weekly assignment verified (${assignment.name}). Automatically queued.`;
 
       // Create Recognition Event
       const recEvent = await this.prisma.recognitionEvent.create({
         data: {
-          cameraId: camera?.id || dto.cameraId,
+          cameraId: effectiveCameraId,
           terminalId,
           cameraType: 'ENTRY',
           plateNumber: normalizedPlate,
@@ -556,28 +666,34 @@ export class RecognitionService {
           imagePath: dto.imagePath || null,
           processingResult: 'ACCEPTED',
           vehicleId: vehicle.id,
-          remarks: `Valid weekly assignment verified (${assignment.name}). Automatically queued.`,
+          remarks: recRemarks,
         },
         include: { camera: true, terminal: true },
       });
 
-      // Create Queue Entry
+      // Create Queue Entry (status='WAITING', isViolation=false -> appears in Incoming Pending tab!)
       const queueEntry = await this.prisma.queueEntry.create({
         data: {
           vehicleId: vehicle.id,
           plateNumber: vehicle.plateNumber,
-          vehicleGroupName: vehicle.group?.name || '',
+          vehicleGroupName: isQrCameraPass
+            ? `${vehicle.group?.name || 'QR Pass'} (${dto.passType || 'VERIFIED'})`
+            : vehicle.group?.name || '',
           assignmentId: assignment.id,
           terminalId,
           terminalName: terminal?.name || '',
-          destinationTerminalName: checkOutTerminal?.name || '',
+          destinationTerminalName: isQrCameraPass
+            ? `${dto.passType || 'QR'} Pass Clearance`
+            : checkOutTerminal?.name || '',
           position,
           status: 'WAITING',
           entryType: 'AUTO_RECOGNIZED',
           recognitionEventId: recEvent.id,
-          cameraId: camera?.id || null,
+          cameraId: effectiveCameraId,
           confidence: dto.confidence,
-          checkedInBy: `ANPR Gate (${camera?.name || 'Entry Camera'})`,
+          checkedInBy: isQrCameraPass
+            ? `QR Gate (${dto.passId || dto.passType || 'CAMERA'})`
+            : `ANPR Gate (${camera?.name || 'Entry Camera'})`,
           isViolation: false,
         },
       });
@@ -607,7 +723,7 @@ export class RecognitionService {
         processingResult: 'ACCEPTED',
         event: mappedEvent,
         queueEntry,
-        message: `Vehicle ${normalizedPlate} verified for ${assignment.name} and added to queue (Position #${position}).`,
+        message: `Vehicle ${vehicle.plateNumber} cleared and added to Incoming Pending queue (Position #${position}).`,
       };
     }
 
@@ -633,7 +749,7 @@ export class RecognitionService {
       ? `Vehicle ${vehicle.plateNumber} is assigned to [${assignedTerminalName}], but arrived at terminal [${terminal?.name || terminalId}].`
       : `Vehicle ${vehicle.plateNumber} is not assigned to any active weekly roster, but entered terminal [${terminal?.name || terminalId}].`;
 
-    // Fallback assignment to link to queue
+    // Fallback assignment to link to queue (prevent FK error)
     let fallbackAssignment = otherAssignment || await this.prisma.weeklyAssignment.findFirst({
       where: { status: { in: ['PUBLISHED', 'LOCKED', 'DRAFT'] } },
     });
@@ -642,9 +758,26 @@ export class RecognitionService {
       fallbackAssignment = await this.prisma.weeklyAssignment.findFirst();
     }
 
+    if (!fallbackAssignment) {
+      const otherTerm = await this.prisma.terminal.findFirst({ where: { id: { not: terminalId } } });
+      fallbackAssignment = await this.prisma.weeklyAssignment.create({
+        data: {
+          name: 'Unassigned Gate Entry',
+          weekNumber: currentQuarter,
+          weekStart: now,
+          weekEnd: new Date(now.getTime() + 90 * 24 * 3600 * 1000),
+          vehicleGroupId: vehicle.groupId,
+          originTerminalId: terminalId,
+          destinationTerminalId: otherTerm?.id || terminalId,
+          dispatcherIds: [],
+          status: 'DRAFT',
+        },
+      });
+    }
+
     const recEvent = await this.prisma.recognitionEvent.create({
       data: {
-        cameraId: camera?.id || dto.cameraId,
+        cameraId: effectiveCameraId,
         terminalId,
         cameraType: 'ENTRY',
         plateNumber: normalizedPlate,
@@ -668,7 +801,7 @@ export class RecognitionService {
         vehicleId: vehicle.id,
         plateNumber: vehicle.plateNumber,
         vehicleGroupName: `${vehicle.group?.name || ''} (${isWrongTerminal ? 'WRONG TERMINAL' : 'UNASSIGNED'})`,
-        assignmentId: fallbackAssignment ? fallbackAssignment.id : 'unassigned',
+        assignmentId: fallbackAssignment.id,
         terminalId,
         terminalName: terminal?.name || '',
         destinationTerminalName: isWrongTerminal ? `Assigned to: ${assignedTerminalName}` : 'Unassigned Route',
@@ -676,7 +809,7 @@ export class RecognitionService {
         status: 'WAITING',
         entryType: 'VIOLATION',
         recognitionEventId: recEvent.id,
-        cameraId: camera?.id || null,
+        cameraId: effectiveCameraId,
         confidence: dto.confidence,
         checkedInBy: `ANPR Gate (${camera?.name || 'Entry Camera'})`,
         isViolation: true,
@@ -729,6 +862,10 @@ export class RecognitionService {
       violation,
       message: `⚠ VIOLATION: ${violationDesc} Dispatcher review required.`,
     };
+    } catch (err) {
+      this.gateCooldownCache.delete(cooldownKey);
+      throw err;
+    }
   }
 
   async listEvents(query: QueryParamsDto & { terminalId?: string; cameraId?: string; processingResult?: string }) {
