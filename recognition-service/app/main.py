@@ -3,7 +3,7 @@ import os
 import cv2
 import time
 import logging
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 
 # Ensure parent directory (recognition-service) is in sys.path when running python app/main.py
 if '__file__' in globals():

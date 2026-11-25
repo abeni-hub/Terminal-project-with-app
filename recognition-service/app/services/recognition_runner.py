@@ -2,7 +2,7 @@ import time
 import datetime
 import threading
 import logging
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Set, Any, Tuple
 import cv2
 import numpy as np
 
