@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import {
   QrCode, Scan, ShieldCheck, CheckCircle2, XCircle, AlertCircle,
   DoorOpen, Camera, FileText, RefreshCw, Upload, ArrowRight,
   ShieldAlert, Clock, Check, AlertTriangle, Sparkles, PlusCircle,
-  Search, Download, RotateCcw, Ban, KeyRound, ExternalLink, ListFilter
+  Search, Download, RotateCcw, Ban, KeyRound, ExternalLink, ListFilter,
+  Video, VideoOff, Zap
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -87,6 +88,29 @@ export default function QRGateScannerPage() {
   const [logsLoading, setLogsLoading] = useState(false);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
+  // Directly Connected Live Camera Opener/Closer & Auto-Scanner states
+  const [cameraMode, setCameraMode] = useState<'browser' | 'host'>('browser');
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [autoOpenCamera, setAutoOpenCamera] = useState(false);
+  const [autoEvaluateOnScan, setAutoEvaluateOnScan] = useState(true);
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
+  const [hostCameras, setHostCameras] = useState<Array<{ deviceIndex: number; name: string; available: boolean }>>([]);
+  const [selectedHostIdx, setSelectedHostIdx] = useState<string>('0');
+  const [isHostCameraOpen, setIsHostCameraOpen] = useState(false);
+  const [hostCamLoading, setHostCamLoading] = useState(false);
+  const [cameraStatusMsg, setCameraStatusMsg] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isScanningFrame, setIsScanningFrame] = useState(false);
+  const [lastLiveQrDetected, setLastLiveQrDetected] = useState<string | null>(null);
+
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const scanIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const scanInFlightRef = useRef<boolean>(false);
+  const recentScannedRef = useRef<Map<string, number>>(new Map());
+
   // QR Generator & Pass Management states
   const [passes, setPasses] = useState<QRPassItem[]>([]);
   const [passSearch, setPassSearch] = useState('');
@@ -148,10 +172,352 @@ export default function QRGateScannerPage() {
     }
   };
 
+  // Enumerate directly connected browser cameras & host USB cameras
+  const detectAllCameras = useCallback(async () => {
+    setCameraError(null);
+    // 1. Browser MediaDevices
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const cams = devices.filter((d) => d.kind === 'videoinput');
+        setVideoDevices(cams);
+        if (cams.length > 0 && !selectedDeviceId) {
+          setSelectedDeviceId(cams[0].deviceId);
+        }
+      } catch (e) {
+        console.warn('Could not enumerate browser cameras:', e);
+      }
+    }
+
+    // 2. Host Server USB Cameras
+    try {
+      const res = await fetch('/recognition-api/detect-pc-cameras');
+      if (res.ok) {
+        const data = await res.json();
+        setHostCameras(data.pc_cameras || []);
+      }
+    } catch (e) {
+      console.warn('Could not probe host PC cameras:', e);
+    }
+
+    // 3. Check if host CAM-PC-01 is already running
+    try {
+      const res = await fetch('/recognition-api/cameras');
+      if (res.ok) {
+        const list = await res.json();
+        const pcRunning = Array.isArray(list) && list.some((c: any) => c.cameraId === 'CAM-PC-01' && c.is_running);
+        setIsHostCameraOpen(pcRunning);
+      }
+    } catch {
+      // ignore
+    }
+  }, [selectedDeviceId]);
+
+  // Shared Gate Evaluation helper
+  const evaluateGateWithArgs = useCallback(
+    async (qrTextOverride?: string, plateOverride?: string) => {
+      const targetQr = (qrTextOverride ?? qrPayload).trim();
+      const targetPlate = (plateOverride ?? plateNumber).trim();
+      setLoading(true);
+      try {
+        const res = await fetch('/recognition-api/gate-decision', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            plateNumber: targetPlate || undefined,
+            confidence: targetPlate ? parseFloat(ocrConfidence) || 0.92 : 0.0,
+            qrCode: targetQr,
+            direction: direction,
+          }),
+        });
+
+        if (!res.ok) {
+          const errJson = await res.json().catch(() => ({}));
+          throw new Error(errJson.detail || `Server returned error (${res.status}: ${res.statusText || 'Internal Error'})`);
+        }
+
+        const decision: GateDecisionResponse = await res.json();
+        setLastDecision(decision);
+        fetchAuditLogs();
+        fetchPasses();
+      } catch (err: any) {
+        alert(`Error evaluating gate decision: ${err.message}`);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [qrPayload, plateNumber, ocrConfidence, direction]
+  );
+
+  // Handle a newly decoded QR string from live camera or image upload
+  const handleDecodedQrInput = useCallback(
+    async (rawText: string, detectedPlate?: string | null) => {
+      if (!rawText) return;
+      const now = Date.now();
+      const lastSeen = recentScannedRef.current.get(rawText) || 0;
+      if (now - lastSeen < 5000) {
+        return; // 5-second live scan debounce to avoid repeated gate calls on same QR
+      }
+      recentScannedRef.current.set(rawText, now);
+
+      setLastLiveQrDetected(rawText);
+      setQrPayload(rawText);
+
+      // Extract plate if encoded in JSON payload
+      let extractedPlate = detectedPlate || '';
+      if (!extractedPlate) {
+        try {
+          const parsed = JSON.parse(rawText);
+          if (parsed.plate_number) extractedPlate = String(parsed.plate_number);
+        } catch {
+          // ignore
+        }
+      }
+      if (extractedPlate) {
+        setPlateNumber(extractedPlate);
+      }
+
+      setUploadStatus(`QR Read: ${rawText.slice(0, 60)}${rawText.length > 60 ? '...' : ''}`);
+      if (autoEvaluateOnScan) {
+        await evaluateGateWithArgs(rawText, extractedPlate || plateNumber);
+      }
+    },
+    [autoEvaluateOnScan, evaluateGateWithArgs, plateNumber]
+  );
+
+  // Stop & Release Directly Connected Browser Camera
+  const closeBrowserCamera = useCallback(() => {
+    if (scanIntervalRef.current) {
+      clearInterval(scanIntervalRef.current);
+      scanIntervalRef.current = null;
+    }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    setIsCameraOpen(false);
+    setIsScanningFrame(false);
+    setCameraStatusMsg('Camera closed.');
+  }, []);
+
+  // Open Directly Connected Browser / USB Camera & Start Automatic QR Reading Loop
+  const openBrowserCamera = useCallback(
+    async (deviceIdOverride?: string) => {
+      setCameraError(null);
+      setCameraStatusMsg('Opening directly connected camera...');
+
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+        const isInsecureHttp = typeof window !== 'undefined' && !window.isSecureContext;
+        setCameraError(
+          isInsecureHttp
+            ? `Browser blocked direct webcam on insecure HTTP (${window.location.origin}). To enable in Chrome: open chrome://flags/#unsafely-treat-insecure-origin-as-secure, add "${window.location.origin}", enable & relaunch — OR use "Host USB Camera" / "Device Camera Snapshot" below.`
+            : 'Camera API (getUserMedia) is unavailable in this browser.'
+        );
+        setCameraStatusMsg(null);
+        return;
+      }
+
+      // Stop any active stream before opening new one
+      closeBrowserCamera();
+
+      try {
+        const devId = deviceIdOverride || selectedDeviceId;
+        const constraints: MediaStreamConstraints = {
+          video: devId
+            ? { deviceId: { exact: devId }, width: { ideal: 1280 }, height: { ideal: 720 } }
+            : { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        streamRef.current = stream;
+
+        // Attach stream to video element
+        setIsCameraOpen(true);
+        setCameraStatusMsg('Camera open! Point a QR pass at the lens to auto-scan.');
+
+        // Wait a tick for videoRef to mount if hidden
+        setTimeout(() => {
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            videoRef.current.play().catch(() => {});
+          }
+        }, 50);
+
+        // Refresh device labels now that permission was granted
+        detectAllCameras();
+
+        // Start automatic continuous QR frame scanner (every 650ms)
+        const BarcodeDetectorCls = (window as any).BarcodeDetector;
+        const detector = BarcodeDetectorCls ? new BarcodeDetectorCls({ formats: ['qr_code'] }) : null;
+
+        scanIntervalRef.current = setInterval(async () => {
+          if (!videoRef.current || videoRef.current.readyState < 2 || scanInFlightRef.current) return;
+          scanInFlightRef.current = true;
+          setIsScanningFrame(true);
+
+          try {
+            // 1. Fast native BarcodeDetector if supported by Chromium/Edge
+            if (detector) {
+              try {
+                const barcodes = await detector.detect(videoRef.current);
+                if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                  await handleDecodedQrInput(barcodes[0].rawValue);
+                  scanInFlightRef.current = false;
+                  setIsScanningFrame(false);
+                  return;
+                }
+              } catch {
+                // fallback to backend OpenCV/pyzbar scanner
+              }
+            }
+
+            // 2. Capture video frame to hidden canvas and send to Python QRScanner
+            const video = videoRef.current;
+            const canvas = canvasRef.current;
+            if (canvas && video.videoWidth > 0 && video.videoHeight > 0) {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              const ctx = canvas.getContext('2d');
+              if (ctx) {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                const res = await fetch('/recognition-api/scan-qr', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    image: dataUrl,
+                    plateNumber: plateNumber.trim() || undefined,
+                    direction,
+                  }),
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (data.found && data.rawText) {
+                    await handleDecodedQrInput(
+                      data.rawText,
+                      data.validation?.payload?.plate_number || null
+                    );
+                  }
+                }
+              }
+            }
+          } catch (scanErr) {
+            console.warn('Frame QR scan error:', scanErr);
+          } finally {
+            scanInFlightRef.current = false;
+            setIsScanningFrame(false);
+          }
+        }, 700);
+      } catch (err: any) {
+        setIsCameraOpen(false);
+        setCameraStatusMsg(null);
+        setCameraError(
+          `Could not open camera: ${err?.message || err}. Ensure camera permissions are allowed and no other app is locking the webcam.`
+        );
+      }
+    },
+    [selectedDeviceId, closeBrowserCamera, detectAllCameras, handleDecodedQrInput, plateNumber, direction]
+  );
+
+  // Open / Close Host Server Directly-Connected USB Camera (CAM-PC-01)
+  const openHostCamera = async () => {
+    setHostCamLoading(true);
+    setCameraError(null);
+    try {
+      const res = await fetch('/recognition-api/cameras/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cameraId: 'CAM-PC-01',
+          terminalId: 'terminal-demo',
+          cameraType: direction,
+          sourceType: 'USB',
+          sourceAddress: selectedHostIdx || '0',
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to open host USB camera');
+      }
+      setIsHostCameraOpen(true);
+      setCameraStatusMsg(`Host USB camera (Device #${selectedHostIdx}) opened on CAM-PC-01.`);
+    } catch (err: any) {
+      setCameraError(err.message);
+    } finally {
+      setHostCamLoading(false);
+    }
+  };
+
+  const closeHostCamera = async () => {
+    setHostCamLoading(true);
+    try {
+      await fetch('/recognition-api/cameras/stop/CAM-PC-01', { method: 'POST' });
+      setIsHostCameraOpen(false);
+      setCameraStatusMsg('Host USB camera closed.');
+    } catch (err: any) {
+      setCameraError(err.message);
+    } finally {
+      setHostCamLoading(false);
+    }
+  };
+
+  // Toggle Auto-Open Camera preference
+  const toggleAutoOpenCamera = () => {
+    const next = !autoOpenCamera;
+    setAutoOpenCamera(next);
+    try {
+      localStorage.setItem('qr_auto_open_camera', next ? '1' : '0');
+    } catch {}
+    if (next && !isCameraOpen && cameraMode === 'browser') {
+      openBrowserCamera();
+    }
+  };
+
   useEffect(() => {
     fetchAuditLogs();
     fetchPasses();
+    detectAllCameras();
+
+    // Auto-open camera if user enabled Auto-Open
+    let shouldAutoOpen = false;
+    try {
+      shouldAutoOpen = localStorage.getItem('qr_auto_open_camera') === '1';
+      setAutoOpenCamera(shouldAutoOpen);
+    } catch {}
+    if (shouldAutoOpen) {
+      openBrowserCamera();
+    }
+
+    return () => {
+      // Automatically close camera hardware when leaving page
+      if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+      if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop());
+    };
   }, []);
+
+  // Poll host camera live QR detections when Host USB camera mode is open
+  useEffect(() => {
+    if (!isHostCameraOpen || cameraMode !== 'host') return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch('/recognition-api/cameras');
+        if (!res.ok) return;
+        const cams = await res.json();
+        const pcCam = Array.isArray(cams) ? cams.find((c: any) => c.cameraId === 'CAM-PC-01') : null;
+        if (pcCam?.latest_qr?.rawText) {
+          handleDecodedQrInput(pcCam.latest_qr.rawText, pcCam.latest_qr.plateNumber);
+        }
+        if (pcCam?.latest_decision) {
+          setLastDecision(pcCam.latest_decision);
+        }
+      } catch {}
+    }, 1200);
+    return () => clearInterval(timer);
+  }, [isHostCameraOpen, cameraMode, handleDecodedQrInput]);
 
   // Preset Handlers for presentation
   const handlePreset = (type: 'VALID' | 'MISMATCH' | 'EXPIRED' | 'VISITOR') => {
@@ -219,42 +585,14 @@ export default function QRGateScannerPage() {
   };
 
   // Submit Gate Decision Evaluation
-  const handleEvaluate = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/recognition-api/gate-decision', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          plateNumber: plateNumber.trim() || undefined,
-          confidence: plateNumber.trim() ? parseFloat(ocrConfidence) || 0.9 : 0.0,
-          qrCode: qrPayload.trim(),
-          direction: direction,
-        }),
-      });
+  const handleEvaluate = () => evaluateGateWithArgs();
 
-      if (!res.ok) {
-        const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || `Server returned error (${res.status}: ${res.statusText || 'Internal Error'})`);
-      }
-
-      const decision: GateDecisionResponse = await res.json();
-      setLastDecision(decision);
-      fetchAuditLogs();
-      fetchPasses();
-    } catch (err: any) {
-      alert(`Error evaluating gate decision: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Upload and scan QR image file directly
+  // Upload and scan QR image file or mobile camera snapshot directly
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setUploadStatus('Scanning uploaded image for QR code...');
+    setUploadStatus('Scanning image for QR code...');
     const formData = new FormData();
     formData.append('file', file);
 
@@ -265,22 +603,19 @@ export default function QRGateScannerPage() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'No QR code found in uploaded image');
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Server error (${res.status})`);
       }
 
       const data = await res.json();
-      if (data.success && data.result) {
-        setUploadStatus(`Decoded: ${data.result.raw_data}`);
-        setQrPayload(data.result.raw_data);
-        if (data.result.payload?.plate_number) {
-          setPlateNumber(data.result.payload.plate_number);
-        }
+      if (data.found && data.rawText) {
+        const decodedPlate = data.validation?.payload?.plate_number || null;
+        await handleDecodedQrInput(data.rawText, decodedPlate);
       } else {
-        setUploadStatus('No QR code detected in image.');
+        setUploadStatus('No QR code detected in image. Ensure QR is clear and well-lit.');
       }
     } catch (err: any) {
-      setUploadStatus(`Upload failed: ${err.message}`);
+      setUploadStatus(`Scan failed: ${err.message}`);
     }
   };
 
@@ -536,7 +871,7 @@ export default function QRGateScannerPage() {
                   {/* Quick Image Scanner Upload & Camera Capture */}
                   <div className="pt-2 border-t border-border">
                     <label className="text-xs font-semibold text-muted-foreground block mb-2 text-left">
-                      Scan QR Pass (File Upload or Device Camera Snapshot):
+                      Scan QR Pass (File Upload or Mobile Camera Snapshot):
                     </label>
                     <div className="flex items-center gap-2">
                       <Input
@@ -548,11 +883,273 @@ export default function QRGateScannerPage() {
                       />
                     </div>
                     {uploadStatus && (
-                      <p className="text-[11px] text-muted-foreground mt-1 text-left font-mono truncate">
+                      <p className="text-[11px] text-emerald-600 mt-1.5 text-left font-mono truncate">
                         {uploadStatus}
                       </p>
                     )}
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Directly Connected Camera Opener & Closer + Auto QR Reader */}
+              <Card className="border-primary/20">
+                <CardHeader className="pb-3 border-b border-border flex flex-row items-center justify-between">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                    <Camera className="h-4 w-4 text-primary" /> Direct Camera QR Scanner
+                  </CardTitle>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={toggleAutoOpenCamera}
+                      title="Automatically open directly connected camera when visiting this page"
+                      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full border transition-colors flex items-center gap-1 ${
+                        autoOpenCamera
+                          ? 'bg-amber-500/15 text-amber-600 border-amber-300'
+                          : 'bg-muted text-muted-foreground border-border'
+                      }`}
+                    >
+                      <Zap className="h-3 w-3" />
+                      Auto-Open: {autoOpenCamera ? 'ON' : 'OFF'}
+                    </button>
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] font-mono ${
+                        (cameraMode === 'browser' ? isCameraOpen : isHostCameraOpen)
+                          ? 'border-emerald-500 text-emerald-600 bg-emerald-500/10'
+                          : ''
+                      }`}
+                    >
+                      {(cameraMode === 'browser' ? isCameraOpen : isHostCameraOpen) ? 'CAMERA OPEN' : 'CLOSED'}
+                    </Badge>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="p-4 space-y-3">
+                  {/* Source Mode Toggle: Client Browser Camera vs Host USB Camera */}
+                  <div className="grid grid-cols-2 gap-1 p-1 bg-muted rounded-lg text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setCameraMode('browser')}
+                      className={`py-1.5 px-2 rounded-md font-medium transition-all ${
+                        cameraMode === 'browser'
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      💻 Client Webcam
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCameraMode('host')}
+                      className={`py-1.5 px-2 rounded-md font-medium transition-all ${
+                        cameraMode === 'host'
+                          ? 'bg-background text-foreground shadow-sm'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      🔌 Server USB (CAM-PC-01)
+                    </button>
+                  </div>
+
+                  {/* Camera Device Selector + Opener & Closer Button */}
+                  {cameraMode === 'browser' ? (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={selectedDeviceId}
+                          onChange={(e) => {
+                            setSelectedDeviceId(e.target.value);
+                            if (isCameraOpen) openBrowserCamera(e.target.value);
+                          }}
+                          className="flex-1 h-9 rounded-md border border-input bg-background px-2.5 text-xs"
+                        >
+                          {videoDevices.length === 0 ? (
+                            <option value="">Default Connected Camera</option>
+                          ) : (
+                            videoDevices.map((dev, idx) => (
+                              <option key={dev.deviceId || idx} value={dev.deviceId}>
+                                {dev.label || `Connected Camera #${idx + 1}`}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-9 w-9 shrink-0"
+                          onClick={detectAllCameras}
+                          title="Detect connected cameras"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {!isCameraOpen ? (
+                          <Button
+                            type="button"
+                            onClick={() => openBrowserCamera()}
+                            className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                            size="sm"
+                          >
+                            <Video className="mr-2 h-4 w-4" /> Open Camera
+                          </Button>
+                        ) : (
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            onClick={closeBrowserCamera}
+                            className="flex-1 font-semibold"
+                            size="sm"
+                          >
+                            <VideoOff className="mr-2 h-4 w-4" /> Close Camera
+                          </Button>
+                        )}
+
+                        <button
+                          type="button"
+                          onClick={() => setAutoEvaluateOnScan((v) => !v)}
+                          className={`px-2.5 h-9 rounded-md border text-[11px] font-medium transition-colors ${
+                            autoEvaluateOnScan
+                              ? 'bg-primary/10 border-primary/30 text-primary'
+                              : 'bg-muted border-border text-muted-foreground'
+                          }`}
+                          title="Automatically evaluate gate clearance as soon as QR is read"
+                        >
+                          {autoEvaluateOnScan ? '⚡ Auto-Gate ON' : 'Manual Gate'}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={selectedHostIdx}
+                          onChange={(e) => setSelectedHostIdx(e.target.value)}
+                          className="flex-1 h-9 rounded-md border border-input bg-background px-2.5 text-xs"
+                        >
+                          {hostCameras.length === 0 ? (
+                            <option value="0">Server USB Device #0</option>
+                          ) : (
+                            hostCameras.map((hc) => (
+                              <option key={hc.deviceIndex} value={String(hc.deviceIndex)}>
+                                {hc.name} {hc.available ? '(Ready)' : '(Not Found)'}
+                              </option>
+                            ))
+                          )}
+                        </select>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="h-9 w-9 shrink-0"
+                          onClick={detectAllCameras}
+                          title="Probe server USB cameras"
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+
+                      {!isHostCameraOpen ? (
+                        <Button
+                          type="button"
+                          onClick={openHostCamera}
+                          disabled={hostCamLoading}
+                          className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-semibold"
+                          size="sm"
+                        >
+                          <Video className="mr-2 h-4 w-4" />
+                          {hostCamLoading ? 'Opening Host Camera...' : 'Open Server USB Camera'}
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={closeHostCamera}
+                          disabled={hostCamLoading}
+                          className="w-full font-semibold"
+                          size="sm"
+                        >
+                          <VideoOff className="mr-2 h-4 w-4" />
+                          {hostCamLoading ? 'Closing...' : 'Close Server USB Camera'}
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Error / Helper Notice */}
+                  {cameraError && (
+                    <div className="p-2.5 rounded-md bg-amber-500/10 border border-amber-300 text-amber-800 dark:text-amber-300 text-[11px] text-left leading-relaxed">
+                      <span className="font-semibold block mb-0.5">Camera Notice:</span>
+                      {cameraError}
+                    </div>
+                  )}
+                  {cameraStatusMsg && !cameraError && (
+                    <p className="text-[11px] text-muted-foreground text-left">{cameraStatusMsg}</p>
+                  )}
+
+                  {/* Live Camera Viewport */}
+                  <div className="aspect-video w-full rounded-lg bg-black/95 border border-border overflow-hidden relative flex items-center justify-center">
+                    {cameraMode === 'browser' ? (
+                      <>
+                        <video
+                          ref={videoRef}
+                          playsInline
+                          muted
+                          autoPlay
+                          className={`w-full h-full object-cover ${isCameraOpen ? 'block' : 'hidden'}`}
+                        />
+                        {!isCameraOpen && (
+                          <div className="text-center p-4 text-xs text-muted-foreground space-y-1.5">
+                            <VideoOff className="h-8 w-8 mx-auto opacity-40" />
+                            <p>Camera is closed.</p>
+                            <p className="text-[11px] opacity-75">
+                              Click <strong>Open Camera</strong> above to start live QR scanning.
+                            </p>
+                          </div>
+                        )}
+                        {isCameraOpen && (
+                          <>
+                            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
+                              <div className="w-40 h-40 border-2 border-emerald-400/70 rounded-lg shadow-[0_0_0_9999px_rgba(0,0,0,0.25)]" />
+                            </div>
+                            <div className="absolute top-2 left-2 bg-black/75 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded flex items-center gap-1.5">
+                              <span className={`h-1.5 w-1.5 rounded-full ${isScanningFrame ? 'bg-amber-400 animate-ping' : 'bg-emerald-400 animate-pulse'}`} />
+                              AUTO-SCAN ACTIVE
+                            </div>
+                          </>
+                        )}
+                      </>
+                    ) : isHostCameraOpen ? (
+                      <>
+                        <img
+                          src="/recognition-api/preview/CAM-PC-01"
+                          alt="Host Camera Stream"
+                          className="w-full h-full object-contain"
+                        />
+                        <div className="absolute top-2 left-2 bg-black/75 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded flex items-center gap-1.5">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          SERVER USB • CAM-PC-01
+                        </div>
+                      </>
+                    ) : (
+                      <div className="text-center p-4 text-xs text-muted-foreground space-y-1.5">
+                        <VideoOff className="h-8 w-8 mx-auto opacity-40" />
+                        <p>Server USB Camera is closed.</p>
+                        <p className="text-[11px] opacity-75">
+                          Click <strong>Open Server USB Camera</strong> to stream directly connected host hardware.
+                        </p>
+                      </div>
+                    )}
+                    <canvas ref={canvasRef} className="hidden" />
+                  </div>
+
+                  {lastLiveQrDetected && (
+                    <div className="p-2 rounded bg-emerald-500/10 border border-emerald-300 text-emerald-700 dark:text-emerald-300 text-[11px] font-mono text-left truncate">
+                      ✓ Last QR Read: {lastLiveQrDetected}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

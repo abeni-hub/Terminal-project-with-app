@@ -15,7 +15,7 @@ else:
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from fastapi import FastAPI, HTTPException, Response, BackgroundTasks, File, UploadFile, Body
+from fastapi import FastAPI, HTTPException, Response, BackgroundTasks, File, UploadFile, Body, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -124,31 +124,48 @@ async def scan_image(
     }
 
 @app.post("/scan-qr")
-async def scan_qr(
-    file: Optional[UploadFile] = File(None),
-    payload: Optional[Dict[str, Any]] = Body(None),
-):
+async def scan_qr(request: Request):
     """
     Dedicated QR Code Scanner Endpoint.
     Accepts:
-      - Raw QR string: {"qrText": "PASS:..."} or {"qrString": "..."}
-      - OR multipart image upload containing a QR code
-      - OR JSON base64 image: {"image": "..."}
-    Returns decoded payload, validation status, and preliminary gate access decision.
+      - JSON: {"qrText": "..."} OR {"image": "data:image/jpeg;base64,..."}
+      - Multipart Form: file=<image>
+    Returns decoded payload, validation status, and gate access decision.
     """
-    # 1. Check for direct raw text string first (instant test / hardware kiosk scanner hook)
-    raw_text = None
-    if payload and isinstance(payload, dict):
-        raw_text = payload.get("qrText") or payload.get("qrString") or payload.get("token")
+    content_type = request.headers.get("content-type", "").lower()
+    payload: Dict[str, Any] = {}
+    img_bytes: Optional[bytes] = None
 
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except Exception:
+            payload = {}
+    else:
+        try:
+            form = await request.form()
+            file_field = form.get("file")
+            if file_field and hasattr(file_field, "read"):
+                img_bytes = await file_field.read()
+            for k in ("qrText", "qrString", "token", "image", "imageBase64", "plateNumber", "plate", "direction"):
+                if k in form and isinstance(form[k], str):
+                    payload[k] = form[k]
+        except Exception:
+            pass
+
+    # 1. Check for direct raw text string first
+    raw_text = payload.get("qrText") or payload.get("qrString") or payload.get("token")
     if raw_text:
+        dir_str = str(payload.get("direction", "ENTRY")).upper()
+        dir_enum = GateDirection.ENTRY if dir_str == "ENTRY" else GateDirection.EXIT
         val_res = global_qr_scanner.decode_raw_string(raw_text)
         decision = global_gate_flow.evaluate_gate_access(
             ocr_plate=payload.get("plateNumber") or payload.get("plate"),
             qr_input=val_res.payload if val_res.is_valid else raw_text,
-            direction=GateDirection.ENTRY if payload.get("direction", "ENTRY").upper() == "ENTRY" else GateDirection.EXIT,
+            direction=dir_enum,
         )
         return {
+            "success": True,
             "found": True,
             "rawText": raw_text,
             "validation": {
@@ -161,13 +178,10 @@ async def scan_qr(
             "gateDecision": decision.to_dict(),
         }
 
-    # 2. Extract and decode from Image
-    img_bytes = None
-    if file:
-        img_bytes = await file.read()
-    elif payload and isinstance(payload, dict):
+    # 2. Extract image bytes from JSON base64 if not uploaded via multipart
+    if img_bytes is None:
         b64_str = payload.get("image") or payload.get("imageBase64")
-        if b64_str:
+        if b64_str and isinstance(b64_str, str):
             if "," in b64_str:
                 b64_str = b64_str.split(",", 1)[1]
             try:
@@ -186,6 +200,7 @@ async def scan_qr(
     scan_res = global_qr_scanner.scan_frame(frame, force=True)
     if not scan_res or not scan_res.found:
         return {
+            "success": False,
             "found": False,
             "rawText": "",
             "validation": None,
@@ -194,9 +209,9 @@ async def scan_qr(
         }
 
     val_res = scan_res.validation
-    direction_val = (payload.get("direction") if payload else "ENTRY") or "ENTRY"
+    direction_val = payload.get("direction") or "ENTRY"
     dir_enum = GateDirection.ENTRY if str(direction_val).upper() == "ENTRY" else GateDirection.EXIT
-    plate_arg = payload.get("plateNumber") or payload.get("plate") if payload else None
+    plate_arg = payload.get("plateNumber") or payload.get("plate")
 
     decision = global_gate_flow.evaluate_gate_access(
         ocr_plate=plate_arg,
@@ -205,6 +220,7 @@ async def scan_qr(
     )
 
     return {
+        "success": True,
         "found": True,
         "rawText": scan_res.raw_text,
         "bbox": scan_res.bbox,
@@ -561,6 +577,16 @@ def list_active_cameras():
     result = []
     for cid, worker in workers.items():
         status = worker.provider.get_status()
+        latest_qr = None
+        if worker.latest_qr_scan and worker.latest_qr_scan.found:
+            p = worker.latest_qr_scan.validation.payload if worker.latest_qr_scan.validation else None
+            latest_qr = {
+                "rawText": worker.latest_qr_scan.raw_text,
+                "ticketId": p.ticket_id if p else None,
+                "plateNumber": p.plate_number if p else None,
+                "passType": p.pass_type.value if (p and p.pass_type) else None,
+                "timestamp": worker.qr_scanner.last_decoded_time,
+            }
         result.append({
             "cameraId": cid,
             "terminalId": worker.terminal_id,
@@ -572,6 +598,8 @@ def list_active_cameras():
             "is_connected": status.get("is_connected", False),
             "sourceAddress": status.get("source_address", ""),
             "last_recognized_plate": worker.last_recognized_plate,
+            "latest_qr": latest_qr,
+            "latest_decision": worker.get_latest_gate_decision(),
         })
     return result
 

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { io } from 'socket.io-client';
 import {
   Scan, Camera, CheckCircle2, AlertTriangle, ShieldAlert,
-  Activity, Clock, RefreshCw, BarChart2, Video, Eye,
+  Activity, Clock, RefreshCw, BarChart2, Video, VideoOff, Eye,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, QrCode,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
@@ -33,25 +33,85 @@ export default function RecognitionDashboardPage() {
   const [stats, setStats] = useState<any>({ totalEvents: 0, accuracyRate: 100, acceptedCount: 0, unknownCount: 0 });
   const [connected, setConnected] = useState(false);
   const [streamCameraId, setStreamCameraId] = useState('CAM-DEMO-01');
+  const [activeCameraIds, setActiveCameraIds] = useState<string[]>([]);
+  const [cameraToggleLoading, setCameraToggleLoading] = useState(false);
+  const [cameraActionMsg, setCameraActionMsg] = useState<string | null>(null);
   const [eventPage, setEventPage] = useState(1);
   const eventPageSize = 6;
   const totalEventsCount = events.length;
   const totalEventPages = Math.max(1, Math.ceil(totalEventsCount / eventPageSize));
   const paginatedEvents = events.slice((eventPage - 1) * eventPageSize, eventPage * eventPageSize);
 
-  useEffect(() => {
-    // Check available active camera workers
-    fetch('/recognition-api/health')
-      .then((res) => res.json())
-      .then((health) => {
+  const refreshActiveCameras = async () => {
+    try {
+      const res = await fetch('/recognition-api/health');
+      if (res.ok) {
+        const health = await res.json();
         if (health?.fps_performance) {
           const activeKeys = Object.keys(health.fps_performance);
-          if (activeKeys.length > 0) {
-            setStreamCameraId(activeKeys[0]);
-          }
+          setActiveCameraIds(activeKeys);
+          return activeKeys;
         }
-      })
-      .catch(() => {});
+      }
+    } catch {}
+    return [];
+  };
+
+  const handleOpenCamera = async (camId: string) => {
+    setCameraToggleLoading(true);
+    setCameraActionMsg(null);
+    try {
+      const isMock = camId === 'CAM-DEMO-01';
+      const res = await fetch('/recognition-api/cameras/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cameraId: camId,
+          terminalId: 'terminal-demo',
+          cameraType: 'ENTRY',
+          sourceType: isMock ? 'MOCK_SYNTHETIC' : 'USB',
+          sourceAddress: isMock ? 'MOCK' : '0',
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to open camera');
+      }
+      setStreamCameraId(camId);
+      setCameraActionMsg(`Opened ${camId}`);
+      await refreshActiveCameras();
+    } catch (err: any) {
+      setCameraActionMsg(`Open failed: ${err.message}`);
+    } finally {
+      setCameraToggleLoading(false);
+    }
+  };
+
+  const handleCloseCamera = async (camId: string) => {
+    setCameraToggleLoading(true);
+    setCameraActionMsg(null);
+    try {
+      const res = await fetch(`/recognition-api/cameras/stop/${camId}`, { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to close camera');
+      }
+      setCameraActionMsg(`Closed ${camId}`);
+      await refreshActiveCameras();
+    } catch (err: any) {
+      setCameraActionMsg(`Close failed: ${err.message}`);
+    } finally {
+      setCameraToggleLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // Check available active camera workers
+    refreshActiveCameras().then((activeKeys) => {
+      if (activeKeys.length > 0) {
+        setStreamCameraId(activeKeys[0]);
+      }
+    });
 
     // Initial stats fetch
     fetch(`${ALPR_API_BASE}/recognition/stats`)
@@ -318,19 +378,68 @@ export default function RecognitionDashboardPage() {
                 </button>
               </div>
 
+              {/* Automatic Opener & Closer Controls */}
+              <div className="flex items-center gap-2">
+                {activeCameraIds.includes(streamCameraId) ? (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    className="flex-1"
+                    disabled={cameraToggleLoading}
+                    onClick={() => handleCloseCamera(streamCameraId)}
+                  >
+                    <VideoOff className="mr-2 h-4 w-4" />
+                    {cameraToggleLoading ? 'Closing...' : `Close Camera (${streamCameraId})`}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                    disabled={cameraToggleLoading}
+                    onClick={() => handleOpenCamera(streamCameraId)}
+                  >
+                    <Video className="mr-2 h-4 w-4" />
+                    {cameraToggleLoading ? 'Opening...' : `Open Camera (${streamCameraId})`}
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={refreshActiveCameras}
+                  title="Refresh camera status"
+                >
+                  <RefreshCw className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              {cameraActionMsg && (
+                <p className="text-[11px] text-muted-foreground font-mono">{cameraActionMsg}</p>
+              )}
+
               <div className="aspect-video w-full rounded-lg bg-black/90 overflow-hidden relative flex items-center justify-center border border-border">
-                <img
-                  key={streamCameraId}
-                  src={`/recognition-api/preview/${streamCameraId}`}
-                  alt={`Live Stream ${streamCameraId}`}
-                  className="h-full w-full object-contain"
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
-                />
-                <div className="absolute top-2 left-2 bg-black/70 text-emerald-400 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur-sm flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                  LIVE STREAM • {streamCameraId}
+                {activeCameraIds.includes(streamCameraId) ? (
+                  <img
+                    key={streamCameraId}
+                    src={`/recognition-api/preview/${streamCameraId}`}
+                    alt={`Live Stream ${streamCameraId}`}
+                    className="h-full w-full object-contain"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = 'none';
+                    }}
+                  />
+                ) : (
+                  <div className="text-center p-4 text-xs text-muted-foreground space-y-1">
+                    <VideoOff className="h-8 w-8 mx-auto opacity-40" />
+                    <p>Camera <strong>{streamCameraId}</strong> is currently closed.</p>
+                    <p className="text-[11px] opacity-75">Click <strong>Open Camera</strong> above to start.</p>
+                  </div>
+                )}
+                <div className={`absolute top-2 left-2 bg-black/70 text-[10px] font-mono px-2 py-0.5 rounded backdrop-blur-sm flex items-center gap-1.5 ${activeCameraIds.includes(streamCameraId) ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  <span className={`h-1.5 w-1.5 rounded-full ${activeCameraIds.includes(streamCameraId) ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`} />
+                  {activeCameraIds.includes(streamCameraId) ? `LIVE STREAM • ${streamCameraId}` : `CLOSED • ${streamCameraId}`}
                 </div>
               </div>
 

@@ -15,6 +15,8 @@ from app.voting.majority_vote import MajorityVoter
 from app.storage.image_storage import ImageStorage
 from app.services.nestjs_client import NestJSClient
 from app.qr.qr_scanner import QRScanner, GateFlowManager, GateAction, MatchStatus, GateDirection, QRScanResult, GateDecision
+from app.qr.qr_repository import QRRepository
+from app.qr.qr_manager import QRManager
 
 import concurrent.futures
 
@@ -51,6 +53,8 @@ class RecognitionWorker:
         self.image_storage = ImageStorage()
         self.qr_scanner = QRScanner(throttle_interval=4)
         self.gate_flow_manager = GateFlowManager()
+        self.qr_repo = QRRepository()
+        self.qr_manager = QRManager(repository=self.qr_repo)
 
         self.latest_qr_scan: Optional[QRScanResult] = None
         self.latest_gate_decision: Optional[GateDecision] = None
@@ -253,19 +257,39 @@ class RecognitionWorker:
 
                     if now - self.entity_cooldown.get(qr_cooldown_key, 0) >= self.COOLDOWN_SECONDS:
                         direction = GateDirection.ENTRY if self.camera_type == "ENTRY" else GateDirection.EXIT
-                        decision = self.gate_flow_manager.evaluate_gate_access(
-                            ocr_plate="",
-                            ocr_confidence=0.0,
-                            qr_input=qr_result,
-                            direction=direction,
-                            camera_id=self.camera_id,
-                        )
+                        raw_qr_str = qr_result.raw_text or ""
+                        has_repo_pass = bool(self.qr_repo.get_pass(t_id_val)) if t_id_val and t_id_val != "QR" else False
+                        if has_repo_pass or "sig" in raw_qr_str or "signature" in raw_qr_str:
+                            decision = self.qr_manager.verify_and_consume_gate_pass(
+                                raw_qr_input=raw_qr_str,
+                                detected_plate=None,
+                                detected_confidence=0.0,
+                                direction=direction,
+                                gate_id=self.camera_id,
+                            )
+                            try:
+                                self.gate_flow_manager.audit_logger.log_event(
+                                    decision=decision,
+                                    camera_id=self.camera_id,
+                                    qr_plate=decision.plate_number,
+                                    raw_qr_text=raw_qr_str,
+                                )
+                            except Exception:
+                                pass
+                        else:
+                            decision = self.gate_flow_manager.evaluate_gate_access(
+                                ocr_plate="",
+                                ocr_confidence=0.0,
+                                qr_input=qr_result,
+                                direction=direction,
+                                camera_id=self.camera_id,
+                            )
                         self.latest_gate_decision = decision
                         self.entity_cooldown[qr_cooldown_key] = now
                         if qr_plate_val:
                             self.entity_cooldown[f"{self.camera_id}:PLATE:{qr_plate_val}"] = now
                         if decision.action in [GateAction.OPEN, GateAction.HOLD]:
-                            self.executor.submit(self._async_dispatch_qr, t_id_val, qr_plate_val or "", p_type_val, decision)
+                            self.executor.submit(self._async_dispatch_qr, t_id_val, qr_plate_val or decision.plate_number or "", p_type_val, decision)
                         logger.info(f"🚪 [CAM: {self.camera_id}] QR-Only Gate Action: {decision.action.value} ({decision.reason})")
 
                 for vehicle in tracked_vehicles:
