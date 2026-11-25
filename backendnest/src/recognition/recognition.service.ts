@@ -124,20 +124,29 @@ export class RecognitionService {
     }
 
     // 2. Lookup Vehicle
-    let vehicle = await this.prisma.vehicle.findUnique({
+    let vehicle: any = await this.prisma.vehicle.findUnique({
       where: { plateNumber: normalizedPlate },
       include: { group: true },
     });
 
     // Auto-provision guest vehicle for QR Camera pass verification (Visitor / Subscriber)
     if (!vehicle && (dto.source === 'QR_CAMERA' || dto.passId)) {
-      const defaultGroup = await this.prisma.vehicleGroup.findFirst();
-      const groupId = defaultGroup?.id || 'group-1';
+      let defaultGroup = await this.prisma.vehicleGroup.findFirst();
+      if (!defaultGroup) {
+        defaultGroup = await this.prisma.vehicleGroup.create({
+          data: {
+            id: 'default-group',
+            name: 'General / Visitor',
+            description: 'Default group for visitor and QR passes',
+          },
+        });
+      }
+      const groupId = defaultGroup.id;
       vehicle = await this.prisma.vehicle.create({
         data: {
           plateNumber: normalizedPlate || `QR-${dto.passId}`,
           model: `${dto.passType || 'VISITOR'} Pass (${dto.passId || 'QR'})`,
-          type: 'MINIBUS_14',
+          type: 'MINIBUS',
           capacity: 14,
           status: 'WAITING',
           journeyState: 'WAITING',
