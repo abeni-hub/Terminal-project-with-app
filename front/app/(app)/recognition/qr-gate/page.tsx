@@ -533,15 +533,16 @@ export default function QRGateScannerPage() {
                     </div>
                   )}
 
-                  {/* Quick Image Scanner Upload */}
+                  {/* Quick Image Scanner Upload & Camera Capture */}
                   <div className="pt-2 border-t border-border">
                     <label className="text-xs font-semibold text-muted-foreground block mb-2 text-left">
-                      Upload QR Code Image (File Scanner):
+                      Scan QR Pass (File Upload or Device Camera Snapshot):
                     </label>
                     <div className="flex items-center gap-2">
                       <Input
                         type="file"
                         accept="image/*"
+                        capture="environment"
                         onChange={handleImageUpload}
                         className="text-xs cursor-pointer file:cursor-pointer"
                       />

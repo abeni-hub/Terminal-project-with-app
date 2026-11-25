@@ -32,7 +32,7 @@ export default function RecognitionDashboardPage() {
   const [unknownAlerts, setUnknownAlerts] = useState<RecognitionEvent[]>([]);
   const [stats, setStats] = useState<any>({ totalEvents: 0, accuracyRate: 100, acceptedCount: 0, unknownCount: 0 });
   const [connected, setConnected] = useState(false);
-  const [streamCameraId, setStreamCameraId] = useState('CAM-PC-01');
+  const [streamCameraId, setStreamCameraId] = useState('CAM-DEMO-01');
   const [eventPage, setEventPage] = useState(1);
   const eventPageSize = 6;
   const totalEventsCount = events.length;
@@ -40,6 +40,19 @@ export default function RecognitionDashboardPage() {
   const paginatedEvents = events.slice((eventPage - 1) * eventPageSize, eventPage * eventPageSize);
 
   useEffect(() => {
+    // Check available active camera workers
+    fetch('/recognition-api/health')
+      .then((res) => res.json())
+      .then((health) => {
+        if (health?.fps_performance) {
+          const activeKeys = Object.keys(health.fps_performance);
+          if (activeKeys.length > 0) {
+            setStreamCameraId(activeKeys[0]);
+          }
+        }
+      })
+      .catch(() => {});
+
     // Initial stats fetch
     fetch(`${ALPR_API_BASE}/recognition/stats`)
       .then((res) => res.json())
