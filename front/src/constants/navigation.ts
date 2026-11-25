@@ -2,7 +2,7 @@ import {
   LayoutDashboard, Users, Building2, Route as RouteIcon, Bus, CalendarDays,
   ListOrdered, AlertTriangle, ShieldCheck, FileBarChart, ScrollText,
   Smartphone, Settings, Shield, Car, DollarSign, Camera, Scan, History, BarChart3, ShieldAlert,
-  CreditCard, WalletCards, Contact2, Send, Activity
+  CreditCard, WalletCards, Contact2, Send, Activity, QrCode
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -34,6 +34,7 @@ export const NAV_ITEMS: NavItem[] = [
   { label: 'Weekly Assignments', href: '/rosters', icon: CalendarDays, permission: 'assignments.create', description: 'Periodic route planning' },
   { label: 'Published Assignments', href: '/rosters', icon: CalendarDays, permission: 'queue.view', badge: 'Approved', description: 'View approved 3-month published assignments' },
   { label: 'Recognition Feed', href: '/recognition/dashboard', icon: Scan, permission: 'queue.view', description: 'Live ALPR stream & alerts' },
+  { label: 'QR Pass & Gate Scanner', href: '/recognition/qr-gate', icon: QrCode, permission: 'queue.view', description: 'QR pass scanner, plate reconciliation & gate control' },
   { label: 'Recognition History', href: '/recognition/history', icon: History, permission: 'queue.view', description: 'ALPR recognition log' },
   { label: 'Unregistered Vehicles', href: '/recognition/unknown', icon: ShieldAlert, permission: 'queue.view', description: 'Review & assign unknown plates' },
   { label: 'Camera Management', href: '/cameras', icon: Camera, permission: 'terminals.manage', description: 'ALPR camera devices' },
@@ -89,6 +90,7 @@ export const SUPER_ADMIN_SECTIONS: NavSection[] = [
     title: 'Recognition & Monitoring',
     items: [
       { label: 'Recognition Feed', href: '/recognition/dashboard', icon: Scan, permission: 'queue.view', description: 'Live ALPR stream & alerts' },
+      { label: 'QR Pass & Gate Scanner', href: '/recognition/qr-gate', icon: QrCode, permission: 'queue.view', description: 'QR pass scanner, plate reconciliation & gate control' },
       { label: 'Recognition History', href: '/recognition/history', icon: History, permission: 'queue.view', description: 'ALPR recognition log' },
       { label: 'Unregistered Vehicles', href: '/recognition/unknown', icon: ShieldAlert, permission: 'queue.view', description: 'Review & assign unknown plates' },
       { label: 'Camera Management', href: '/cameras', icon: Camera, permission: 'terminals.manage', description: 'ALPR camera devices' },
@@ -196,6 +198,7 @@ export const DISPATCHER_SECTIONS: NavSection[] = [
     title: 'Vehicle Recognition',
     items: [
       { label: 'Live Recognition Feed', href: '/recognition/dashboard', icon: Scan, permission: 'queue.view', description: 'Live ALPR stream & gate entry' },
+      { label: 'QR Pass & Gate Scanner', href: '/recognition/qr-gate', icon: QrCode, permission: 'queue.view', description: 'Scan QR pass & gate clearance' },
       { label: 'Recognition History', href: '/recognition/history', icon: History, permission: 'queue.view', description: 'Terminal ALPR recognition log' },
       { label: 'Unregistered Vehicles', href: '/recognition/unknown', icon: ShieldAlert, permission: 'queue.view', description: 'Review & escalate unknown plates' },
     ],

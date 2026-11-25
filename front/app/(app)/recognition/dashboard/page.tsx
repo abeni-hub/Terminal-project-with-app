@@ -6,7 +6,7 @@ import { io } from 'socket.io-client';
 import {
   Scan, Camera, CheckCircle2, AlertTriangle, ShieldAlert,
   Activity, Clock, RefreshCw, BarChart2, Video, Eye,
-  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, QrCode,
 } from 'lucide-react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -104,6 +104,11 @@ export default function RecognitionDashboardPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button variant="default" size="sm" asChild>
+            <Link href="/recognition/qr-gate">
+              <QrCode className="mr-1.5 h-4 w-4" /> QR Gate Scanner
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href="/recognition/history">Recognition Log</Link>
           </Button>
