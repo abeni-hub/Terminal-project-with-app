@@ -1,4 +1,5 @@
 import cv2
+import time
 import numpy as np
 from typing import Tuple, Optional
 from app.camera.base import BaseCameraProvider
@@ -13,11 +14,20 @@ class USBCameraProvider(BaseCameraProvider):
         except ValueError:
             self.device_index = 0
         self.cap = None
+        self._last_connect_attempt = 0.0
 
     def connect(self) -> bool:
+        now = time.time()
+        # Cooldown: Don't hammer camera open every 50ms if disconnected
+        if now - self._last_connect_attempt < 3.0:
+            return False
+        self._last_connect_attempt = now
+
         try:
+            if self.cap:
+                self.cap.release()
             self.cap = cv2.VideoCapture(self.device_index)
-            self.is_connected = self.cap.isOpened()
+            self.is_connected = bool(self.cap and self.cap.isOpened())
             return self.is_connected
         except Exception:
             self.is_connected = False

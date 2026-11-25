@@ -248,15 +248,30 @@ def get_gate_audit_logs(limit: int = 50):
 def startup_event():
     logger.info("Initializing High-FPS ANPR Recognition Service...")
     heartbeat_runner.start()
-    # Auto-initialize default PC camera worker (CAM-PC-01) or mock camera
+    # Auto-initialize camera worker: detect physical camera or use mock for headless VPS
     try:
-        pc_provider = CameraProviderFactory.create_provider("CAM-PC-01", "USB", "0")
-        worker = RecognitionWorker("CAM-PC-01", "terminal-demo", "ENTRY", pc_provider, nestjs_client)
-        workers["CAM-PC-01"] = worker
-        worker.start()
-        logger.info("✅ High-FPS PC Camera worker auto-started on CAM-PC-01 (Device 0)")
+        # Test if physical camera index 0 exists and can deliver frames
+        test_cap = cv2.VideoCapture(0)
+        has_cam = test_cap.isOpened()
+        if has_cam:
+            ret, _ = test_cap.read()
+            has_cam = bool(ret)
+        test_cap.release()
+
+        if has_cam:
+            pc_provider = CameraProviderFactory.create_provider("CAM-PC-01", "USB", "0")
+            worker = RecognitionWorker("CAM-PC-01", "terminal-demo", "ENTRY", pc_provider, nestjs_client)
+            workers["CAM-PC-01"] = worker
+            worker.start()
+            logger.info("✅ Physical USB Camera detected & worker started on CAM-PC-01 (Device 0)")
+        else:
+            logger.info("ℹ️ No physical USB webcam detected (headless cloud VPS mode). Starting Mock Synthetic Camera provider.")
+            mock_provider = CameraProviderFactory.create_provider("CAM-DEMO-01", "MOCK_SYNTHETIC", "MOCK")
+            worker = RecognitionWorker("CAM-DEMO-01", "terminal-demo", "ENTRY", mock_provider, nestjs_client)
+            workers["CAM-DEMO-01"] = worker
+            worker.start()
     except Exception as e:
-        logger.warning(f"PC camera 0 not available at startup ({e}). Falling back to mock camera.")
+        logger.warning(f"Camera initialization warning ({e}). Falling back to mock camera.")
         mock_provider = CameraProviderFactory.create_provider("CAM-DEMO-01", "MOCK_SYNTHETIC", "MOCK")
         worker = RecognitionWorker("CAM-DEMO-01", "terminal-demo", "ENTRY", mock_provider, nestjs_client)
         workers["CAM-DEMO-01"] = worker
