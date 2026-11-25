@@ -28,7 +28,7 @@ from app.services.recognition_runner import RecognitionWorker
 from app.services.heartbeat_runner import HeartbeatRunner
 from app.detection.plate_detector import PlateDetector
 from app.ocr.recognizer import OCRRecognizer
-from app.qr.qr_scanner import QRScanner, GateFlowManager, QRPayloadParser, GateDirection, GateAuditLogger, GateDecision
+from app.qr.qr_scanner import QRScanner, GateFlowManager, QRPayloadParser, GateDirection, GateAction, GateAuditLogger, GateDecision
 from app.qr.qr_repository import QRRepository, QRPassRecord, QRAuditLogRecord
 from app.qr.qr_manager import QRManager
 from dataclasses import asdict
@@ -236,71 +236,121 @@ async def scan_qr(request: Request):
         "gateDecision": decision.to_dict(),
     }
 
+def _dispatch_qr_gate_to_nestjs(
+    camera_id: str,
+    direction_str: str,
+    plate_num: str,
+    pass_id: Optional[str],
+    pass_type: Optional[str],
+    match_status: Optional[str],
+):
+    """Forwards verified OPEN QR gate decisions into NestJS Incoming Pending queue."""
+    try:
+        nestjs_client.send_recognition_event(
+            camera_id=camera_id,
+            terminal_id="terminal-demo",
+            camera_type=direction_str,
+            plate_number=plate_num or f"QR-{pass_id or 'PASS'}",
+            confidence=0.98,
+            captured_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            track_id=1,
+            vehicle_type="minibus",
+            direction=direction_str,
+            source="QR_CAMERA",
+            pass_id=pass_id,
+            pass_type=pass_type,
+            match_status=match_status,
+        )
+    except Exception as e:
+        logger.warning(f"Background NestJS queue dispatch warning: {e}")
+
 @app.post("/gate-decision")
-async def gate_decision(payload: Dict[str, Any] = Body(...)):
+async def gate_decision(background_tasks: BackgroundTasks, payload: Dict[str, Any] = Body(...)):
     """
     Direct Gate Reconciliation Endpoint.
     Reconciles Plate OCR and/or QR token and outputs definitive gate command (OPEN, HOLD, REJECT).
     """
-    plate = payload.get("plateNumber") or payload.get("plate")
-    conf = float(payload.get("confidence") or payload.get("ocrConfidence") or 0.0)
-    qr_data = payload.get("qrCode") or payload.get("qrText") or payload.get("ticketId")
-    direction_str = payload.get("direction", "ENTRY").upper()
-    direction = GateDirection.ENTRY if direction_str == "ENTRY" else GateDirection.EXIT
-    camera_id = payload.get("cameraId", "CAM-01")
+    try:
+        plate = payload.get("plateNumber") or payload.get("plate")
+        conf = float(payload.get("confidence") or payload.get("ocrConfidence") or 0.0)
+        qr_data = payload.get("qrCode") or payload.get("qrText") or payload.get("ticketId")
+        direction_str = str(payload.get("direction", "ENTRY")).upper()
+        direction = GateDirection.ENTRY if direction_str == "ENTRY" else GateDirection.EXIT
+        camera_id = payload.get("cameraId", "CAM-01")
 
-    # If QR data provided, route according to pass registration status
-    if qr_data:
-        clean_qr = str(qr_data).strip()
-        pass_id_candidate = ""
-        try:
-            parsed = json.loads(clean_qr)
-            pass_id_candidate = parsed.get("pass_id") or parsed.get("ticket_id") or ""
-        except Exception:
-            if "|" in clean_qr:
-                pass_id_candidate = clean_qr.split("|")[0]
-            elif ":" in clean_qr:
-                pass_id_candidate = clean_qr.split(":")[0]
-
-        has_repo_pass = bool(global_qr_repo.get_pass(pass_id_candidate)) if pass_id_candidate else False
-
-        # If registered pass in DB or HMAC signed payload, verify against lifecycle repository
-        if has_repo_pass or "sig" in clean_qr or "signature" in clean_qr:
-            decision = global_qr_manager.verify_and_consume_gate_pass(
-                raw_qr_input=clean_qr,
-                detected_plate=plate,
-                detected_confidence=conf,
-                direction=direction,
-                gate_id=camera_id,
-            )
+        # If QR data provided, route according to pass registration status
+        if qr_data:
+            clean_qr = str(qr_data).strip()
+            pass_id_candidate = ""
             try:
-                audit_id = global_gate_flow.audit_logger.log_event(
-                    decision=decision,
-                    camera_id=camera_id,
-                    qr_plate=decision.plate_number,
-                    raw_qr_text=clean_qr,
+                parsed = json.loads(clean_qr)
+                pass_id_candidate = parsed.get("pass_id") or parsed.get("ticket_id") or ""
+            except Exception:
+                if "|" in clean_qr:
+                    pass_id_candidate = clean_qr.split("|")[0]
+                elif ":" in clean_qr:
+                    pass_id_candidate = clean_qr.split(":")[0]
+
+            has_repo_pass = bool(global_qr_repo.get_pass(pass_id_candidate)) if pass_id_candidate else False
+
+            # If registered pass in DB or HMAC signed payload, verify against lifecycle repository
+            if has_repo_pass or "sig" in clean_qr or "signature" in clean_qr:
+                decision = global_qr_manager.verify_and_consume_gate_pass(
+                    raw_qr_input=clean_qr,
+                    detected_plate=plate,
+                    detected_confidence=conf,
+                    direction=direction,
+                    gate_id=camera_id,
                 )
-                decision.audit_id = audit_id
-            except Exception as e:
-                logger.warning(f"Could not mirror decision to audit logger: {e}")
+                try:
+                    audit_id = global_gate_flow.audit_logger.log_event(
+                        decision=decision,
+                        camera_id=camera_id,
+                        qr_plate=decision.plate_number,
+                        raw_qr_text=clean_qr,
+                    )
+                    decision.audit_id = audit_id
+                except Exception as e:
+                    logger.warning(f"Could not mirror decision to audit logger: {e}")
+            else:
+                # Presentation presets, simulation tickets, or ad-hoc visitor passes evaluated directly by GateFlowManager
+                decision = global_gate_flow.evaluate_gate_access(
+                    ocr_plate=plate,
+                    ocr_confidence=conf,
+                    qr_input=clean_qr,
+                    direction=direction,
+                    camera_id=camera_id,
+                )
         else:
-            # Presentation presets, simulation tickets, or ad-hoc visitor passes evaluated directly by GateFlowManager
             decision = global_gate_flow.evaluate_gate_access(
                 ocr_plate=plate,
                 ocr_confidence=conf,
-                qr_input=clean_qr,
+                qr_input=None,
                 direction=direction,
                 camera_id=camera_id,
             )
-    else:
-        decision = global_gate_flow.evaluate_gate_access(
-            ocr_plate=plate,
-            ocr_confidence=conf,
-            qr_input=None,
-            direction=direction,
-            camera_id=camera_id,
-        )
-    return decision.to_dict()
+
+        res_dict = decision.to_dict()
+
+        # Auto-populate NestJS "Incoming Pending" queue on verified OPEN clearance
+        act = res_dict.get("action")
+        if act == GateAction.OPEN.value or act == "OPEN":
+            background_tasks.add_task(
+                _dispatch_qr_gate_to_nestjs,
+                camera_id=camera_id,
+                direction_str=direction_str,
+                plate_num=res_dict.get("plate_number") or plate or "",
+                pass_id=res_dict.get("ticket_id"),
+                pass_type=res_dict.get("pass_type"),
+                match_status=res_dict.get("match_status"),
+            )
+
+        return res_dict
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Unhandled error in /gate-decision: {e}")
+        raise HTTPException(status_code=500, detail=f"Gate evaluation error: {str(e)}")
 
 @app.get("/gate-audit-logs")
 def get_gate_audit_logs(limit: int = 50):

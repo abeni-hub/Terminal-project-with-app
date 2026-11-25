@@ -61,6 +61,7 @@ class PassType(str, Enum):
     VISITOR = "VISITOR"
     PREPAID = "PREPAID"
     STAFF = "STAFF"
+    VIP = "VIP"
     DELIVERY = "DELIVERY"
     ONE_TIME = "ONE_TIME"
     UNKNOWN = "UNKNOWN"
@@ -177,15 +178,15 @@ class GateDecision:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
-            "action": self.action.value,
-            "match_status": self.match_status.value,
+            "action": self.action.value if hasattr(self.action, "value") else self.action,
+            "match_status": self.match_status.value if hasattr(self.match_status, "value") else self.match_status,
             "needs_review": self.needs_review,
             "reason": self.reason,
             "plate_number": self.plate_number,
             "ocr_confidence": self.ocr_confidence,
             "ticket_id": self.ticket_id,
-            "pass_type": self.pass_type.value if self.pass_type else None,
-            "direction": self.direction.value,
+            "pass_type": self.pass_type.value if hasattr(self.pass_type, "value") else self.pass_type,
+            "direction": self.direction.value if hasattr(self.direction, "value") else self.direction,
             "fee_deducted": self.fee_deducted,
             "remaining_balance": self.remaining_balance,
             "timestamp": self.timestamp,
@@ -851,15 +852,15 @@ class GateAuditLogger:
             """, (
                 decision.timestamp,
                 camera_id,
-                decision.direction.value,
-                decision.action.value,
-                decision.match_status.value,
+                decision.direction.value if hasattr(decision.direction, "value") else decision.direction,
+                decision.action.value if hasattr(decision.action, "value") else decision.action,
+                decision.match_status.value if hasattr(decision.match_status, "value") else decision.match_status,
                 1 if decision.needs_review else 0,
                 decision.plate_number,
                 qr_plate,
                 decision.plate_number or qr_plate or "UNKNOWN",
                 decision.ticket_id,
-                decision.pass_type.value if decision.pass_type else None,
+                decision.pass_type.value if hasattr(decision.pass_type, "value") else decision.pass_type,
                 account_id,
                 decision.fee_deducted,
                 decision.remaining_balance,

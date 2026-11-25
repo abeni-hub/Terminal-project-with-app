@@ -344,7 +344,7 @@ class QRManager:
                     plate_number=norm_ocr_plate,
                     ocr_confidence=detected_confidence,
                     ticket_id=pass_id,
-                    pass_type=effective_pass_type,
+                    pass_type=PassType.from_str(effective_pass_type),
                     direction=direction,
                     timestamp=now_iso,
                 )
@@ -358,7 +358,7 @@ class QRManager:
                     plate_number=norm_ocr_plate,
                     ocr_confidence=detected_confidence,
                     ticket_id=pass_id,
-                    pass_type=effective_pass_type,
+                    pass_type=PassType.from_str(effective_pass_type),
                     direction=direction,
                     timestamp=now_iso,
                 )
@@ -374,7 +374,7 @@ class QRManager:
                 reason=f"Valid {effective_pass_type} QR pass [{pass_id}] granted clearance (QR_ONLY access).",
                 plate_number=effective_plate or None,
                 ticket_id=pass_id,
-                pass_type=effective_pass_type,
+                pass_type=PassType.from_str(effective_pass_type),
                 direction=direction,
                 timestamp=now_iso,
             )
