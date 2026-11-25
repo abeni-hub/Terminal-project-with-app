@@ -28,6 +28,7 @@ from app.services.recognition_runner import RecognitionWorker
 from app.services.heartbeat_runner import HeartbeatRunner
 from app.detection.plate_detector import PlateDetector
 from app.ocr.recognizer import OCRRecognizer
+from app.qr.qr_scanner import QRScanner, GateFlowManager, QRPayloadParser, GateDirection, GateAuditLogger, GateDecision
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("RecognitionService")
@@ -52,6 +53,8 @@ nestjs_client = NestJSClient()
 heartbeat_runner = HeartbeatRunner(workers, nestjs_client)
 single_plate_detector = PlateDetector()
 single_ocr_recognizer = OCRRecognizer()
+global_qr_scanner = QRScanner(throttle_interval=1)
+global_gate_flow = GateFlowManager()
 
 class StartCameraRequest(BaseModel):
     cameraId: str
@@ -111,6 +114,134 @@ async def scan_image(
         "plateNumber": norm_text,
         "confidence": round(float(conf), 2) if conf else 0.0,
         "rawText": raw_text or norm_text,
+    }
+
+@app.post("/scan-qr")
+async def scan_qr(
+    file: Optional[UploadFile] = File(None),
+    payload: Optional[Dict[str, Any]] = Body(None),
+):
+    """
+    Dedicated QR Code Scanner Endpoint.
+    Accepts:
+      - Raw QR string: {"qrText": "PASS:..."} or {"qrString": "..."}
+      - OR multipart image upload containing a QR code
+      - OR JSON base64 image: {"image": "..."}
+    Returns decoded payload, validation status, and preliminary gate access decision.
+    """
+    # 1. Check for direct raw text string first (instant test / hardware kiosk scanner hook)
+    raw_text = None
+    if payload and isinstance(payload, dict):
+        raw_text = payload.get("qrText") or payload.get("qrString") or payload.get("token")
+
+    if raw_text:
+        val_res = global_qr_scanner.decode_raw_string(raw_text)
+        decision = global_gate_flow.evaluate_gate_access(
+            ocr_plate=payload.get("plateNumber") or payload.get("plate"),
+            qr_input=val_res.payload if val_res.is_valid else raw_text,
+            direction=GateDirection.ENTRY if payload.get("direction", "ENTRY").upper() == "ENTRY" else GateDirection.EXIT,
+        )
+        return {
+            "found": True,
+            "rawText": raw_text,
+            "validation": {
+                "status": val_res.status.value,
+                "isValid": val_res.is_valid,
+                "errorMessage": val_res.error_message,
+                "timeRemainingSeconds": val_res.time_remaining_seconds,
+                "payload": val_res.payload.to_dict() if val_res.payload else None,
+            },
+            "gateDecision": decision.to_dict(),
+        }
+
+    # 2. Extract and decode from Image
+    img_bytes = None
+    if file:
+        img_bytes = await file.read()
+    elif payload and isinstance(payload, dict):
+        b64_str = payload.get("image") or payload.get("imageBase64")
+        if b64_str:
+            if "," in b64_str:
+                b64_str = b64_str.split(",", 1)[1]
+            try:
+                img_bytes = base64.b64decode(b64_str)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid base64 string: {e}")
+
+    if not img_bytes:
+        raise HTTPException(status_code=400, detail="Provide 'qrText' string, image file upload, or base64 image.")
+
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+    if frame is None:
+        raise HTTPException(status_code=400, detail="Failed to decode image.")
+
+    scan_res = global_qr_scanner.scan_frame(frame, force=True)
+    if not scan_res or not scan_res.found:
+        return {
+            "found": False,
+            "rawText": "",
+            "validation": None,
+            "gateDecision": None,
+            "processingTimeMs": scan_res.processing_time_ms if scan_res else 0.0,
+        }
+
+    val_res = scan_res.validation
+    direction_val = (payload.get("direction") if payload else "ENTRY") or "ENTRY"
+    dir_enum = GateDirection.ENTRY if str(direction_val).upper() == "ENTRY" else GateDirection.EXIT
+    plate_arg = payload.get("plateNumber") or payload.get("plate") if payload else None
+
+    decision = global_gate_flow.evaluate_gate_access(
+        ocr_plate=plate_arg,
+        qr_input=scan_res,
+        direction=dir_enum,
+    )
+
+    return {
+        "found": True,
+        "rawText": scan_res.raw_text,
+        "bbox": scan_res.bbox,
+        "methodUsed": scan_res.method_used,
+        "processingTimeMs": round(scan_res.processing_time_ms, 2),
+        "validation": {
+            "status": val_res.status.value if val_res else "UNKNOWN",
+            "isValid": val_res.is_valid if val_res else False,
+            "errorMessage": val_res.error_message if val_res else None,
+            "timeRemainingSeconds": val_res.time_remaining_seconds if val_res else None,
+            "payload": val_res.payload.to_dict() if val_res and val_res.payload else None,
+        },
+        "gateDecision": decision.to_dict(),
+    }
+
+@app.post("/gate-decision")
+async def gate_decision(payload: Dict[str, Any] = Body(...)):
+    """
+    Direct Gate Reconciliation Endpoint.
+    Reconciles Plate OCR and/or QR token and outputs definitive gate command (OPEN, HOLD, REJECT).
+    """
+    plate = payload.get("plateNumber") or payload.get("plate")
+    conf = float(payload.get("confidence") or payload.get("ocrConfidence") or 0.0)
+    qr_data = payload.get("qrCode") or payload.get("qrText") or payload.get("ticketId")
+    direction_str = payload.get("direction", "ENTRY").upper()
+    direction = GateDirection.ENTRY if direction_str == "ENTRY" else GateDirection.EXIT
+    camera_id = payload.get("cameraId", "CAM-01")
+
+    decision = global_gate_flow.evaluate_gate_access(
+        ocr_plate=plate,
+        ocr_confidence=conf,
+        qr_input=qr_data,
+        direction=direction,
+        camera_id=camera_id,
+    )
+    return decision.to_dict()
+
+@app.get("/gate-audit-logs")
+def get_gate_audit_logs(limit: int = 50):
+    """Returns recent parking gate audit and reconciliation logs from SQLite database."""
+    logs = global_gate_flow.audit_logger.get_recent_logs(limit=limit)
+    return {
+        "total": len(logs),
+        "logs": logs,
     }
 
 @app.on_event("startup")

@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     tesseract-ocr \
     tesseract-ocr-eng \
+    libzbar0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

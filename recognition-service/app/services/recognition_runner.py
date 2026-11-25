@@ -14,6 +14,7 @@ from app.ocr.recognizer import OCRRecognizer
 from app.voting.majority_vote import MajorityVoter
 from app.storage.image_storage import ImageStorage
 from app.services.nestjs_client import NestJSClient
+from app.qr.qr_scanner import QRScanner, GateFlowManager, GateAction, MatchStatus, GateDirection, QRScanResult, GateDecision
 
 import concurrent.futures
 
@@ -48,6 +49,12 @@ class RecognitionWorker:
         self.recognizer = OCRRecognizer()
         self.majority_voter = MajorityVoter()
         self.image_storage = ImageStorage()
+        self.qr_scanner = QRScanner(throttle_interval=4)
+        self.gate_flow_manager = GateFlowManager()
+
+        self.latest_qr_scan: Optional[QRScanResult] = None
+        self.latest_gate_decision: Optional[GateDecision] = None
+        self.last_qr_gate_decision_time: float = 0.0
 
         self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="ANPR-Worker")
 
@@ -92,6 +99,12 @@ class RecognitionWorker:
 
     def get_eligible_plates(self) -> List[Dict[str, Any]]:
         return list(self.eligible_plates)
+
+    def get_latest_gate_decision(self) -> Optional[Dict[str, Any]]:
+        return self.latest_gate_decision.to_dict() if self.latest_gate_decision else None
+
+    def get_recent_gate_logs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        return self.gate_flow_manager.audit_logger.get_recent_logs(limit)
 
     def _async_save_and_dispatch(
         self,
@@ -176,8 +189,34 @@ class RecognitionWorker:
                 display_frame = frame.copy()
                 h, w = display_frame.shape[:2]
 
+                # Step 0: Scan frame for QR Code Pass (Throttled interval)
+                qr_result = self.qr_scanner.scan_frame(frame)
+                if qr_result and qr_result.found:
+                    self.latest_qr_scan = qr_result
+                    if qr_result.bbox:
+                        qx, qy, qw, qh = qr_result.bbox
+                        cv2.rectangle(display_frame, (qx, qy), (qx + qw, qy + qh), (0, 255, 255), 2)
+                        t_id = qr_result.validation.payload.ticket_id if qr_result.validation and qr_result.validation.payload else "QR"
+                        cv2.putText(display_frame, f"QR PASS: {t_id}", (qx, max(qy - 8, 20)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
                 # Step 1: Detect & Track Vehicles (ByteTrack)
                 tracked_vehicles = self.vehicle_tracker.track(frame)
+
+                # If no vehicle detected but valid QR pass present: Evaluate QR-Only access
+                if not tracked_vehicles and qr_result and qr_result.found:
+                    now = time.time()
+                    if now - self.last_qr_gate_decision_time > 3.0:
+                        direction = GateDirection.ENTRY if self.camera_type == "ENTRY" else GateDirection.EXIT
+                        decision = self.gate_flow_manager.evaluate_gate_access(
+                            ocr_plate="",
+                            ocr_confidence=0.0,
+                            qr_input=qr_result,
+                            direction=direction,
+                            camera_id=self.camera_id,
+                        )
+                        self.latest_gate_decision = decision
+                        self.last_qr_gate_decision_time = now
+                        logger.info(f"🚪 [CAM: {self.camera_id}] QR-Only Gate Action: {decision.action.value} ({decision.reason})")
 
                 for vehicle in tracked_vehicles:
                     vx, vy, vw, vh = vehicle.bbox
@@ -238,6 +277,18 @@ class RecognitionWorker:
                             box_color = (0, 255, 0) if is_eligible else (0, 0, 255)
                             status_label = "ELIGIBLE" if is_eligible else "UNKNOWN PLATE"
 
+                            # Step 7b: Reconcile Plate with Scanned QR Pass
+                            direction = GateDirection.ENTRY if self.camera_type == "ENTRY" else GateDirection.EXIT
+                            active_qr = self.latest_qr_scan if (self.latest_qr_scan and (now - self.qr_scanner.last_decoded_time < 5.0)) else None
+                            decision = self.gate_flow_manager.evaluate_gate_access(
+                                ocr_plate=plate_text,
+                                ocr_confidence=consensus_conf or confidence,
+                                qr_input=active_qr,
+                                direction=direction,
+                                camera_id=self.camera_id,
+                            )
+                            self.latest_gate_decision = decision
+
                             # Draw Plate Box & Status Banner
                             cv2.rectangle(display_frame, (abs_px, abs_py), (abs_px + pw, abs_py + ph), box_color, 3)
                             banner = f"{status_label}: {plate_text} ({int(confidence * 100)}%)"
@@ -266,6 +317,14 @@ class RecognitionWorker:
                 status_text = f"CAM: {self.camera_id} | {self.camera_type} | FPS: {fps_display} | UNKNOWN PLATES: {len(self.unknown_plates)}"
                 cv2.rectangle(display_frame, (0, 0), (w, 34), (20, 20, 20), -1)
                 cv2.putText(display_frame, status_text, (12, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                # Secondary HUD Banner: Real-time Gate Action & QR Status
+                if self.latest_gate_decision:
+                    g_act = self.latest_gate_decision.action.value
+                    g_col = (0, 255, 0) if g_act == "OPEN" else (0, 165, 255) if g_act == "HOLD" else (0, 0, 255)
+                    g_text = f"GATE: {g_act} [{self.latest_gate_decision.match_status.value}] - {self.latest_gate_decision.reason[:50]}"
+                    cv2.rectangle(display_frame, (0, 35), (w, 62), (10, 10, 10), -1)
+                    cv2.putText(display_frame, g_text, (12, 54), cv2.FONT_HERSHEY_SIMPLEX, 0.55, g_col, 2)
 
                 self.latest_frame = display_frame
 
