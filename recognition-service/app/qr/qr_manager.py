@@ -23,7 +23,7 @@ import qrcode
 from qrcode.constants import ERROR_CORRECT_M, ERROR_CORRECT_Q
 
 from app.qr.qr_repository import QRRepository, QRPassRecord, QRAuditLogRecord
-from app.qr.qr_scanner import PassType, ValidationStatus, MatchStatus, GateAction, GateDirection, GateDecision
+from app.qr.qr_scanner import PassType, ValidationStatus, MatchStatus, GateAction, GateDirection, GateDecision, QRPayloadParser
 
 logger = logging.getLogger("QRManager")
 
@@ -330,9 +330,12 @@ class QRManager:
             except Exception as e:
                 logger.warning(f"Date parse error for pass {pass_id}: {e}")
 
-        # 4. Reconcile Plate Number
-        if norm_ocr_plate and effective_plate:
-            if norm_ocr_plate == effective_plate:
+        # 4. Reconcile Plate Number (hyphen/space/punctuation-insensitive match, e.g. AA00215 == AA-00215)
+        clean_ocr_plate = QRPayloadParser.normalize_plate(norm_ocr_plate)
+        clean_effective_plate = QRPayloadParser.normalize_plate(effective_plate)
+
+        if clean_ocr_plate and clean_effective_plate:
+            if clean_ocr_plate == clean_effective_plate:
                 # MATCHED
                 if db_pass:
                     self.repo.record_scan_use(pass_id, gate_id=gate_id, plate_matched=True)
@@ -340,8 +343,8 @@ class QRManager:
                     action=GateAction.OPEN,
                     match_status=MatchStatus.MATCHED,
                     needs_review=False,
-                    reason=f"Identity confirmed: OCR plate [{norm_ocr_plate}] matches QR pass [{pass_id}].",
-                    plate_number=norm_ocr_plate,
+                    reason=f"Identity confirmed: OCR plate [{norm_ocr_plate}] matches QR pass [{effective_plate}].",
+                    plate_number=effective_plate or norm_ocr_plate,
                     ocr_confidence=detected_confidence,
                     ticket_id=pass_id,
                     pass_type=PassType.from_str(effective_pass_type),
@@ -363,7 +366,7 @@ class QRManager:
                     timestamp=now_iso,
                 )
 
-        elif not norm_ocr_plate and effective_pass_type in ["VISITOR", "PREPAID", "SUBSCRIBER", "STAFF", "VIP"]:
+        elif not clean_ocr_plate and effective_pass_type in ["VISITOR", "PREPAID", "SUBSCRIBER", "STAFF", "VIP"]:
             # QR ONLY ACCESS
             if db_pass:
                 self.repo.record_scan_use(pass_id, gate_id=gate_id, plate_matched=False)

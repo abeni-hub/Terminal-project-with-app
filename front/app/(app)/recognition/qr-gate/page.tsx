@@ -263,15 +263,18 @@ export default function QRGateScannerPage() {
       setLastLiveQrDetected(rawText);
       setQrPayload(rawText);
 
-      // Extract plate if encoded in JSON payload
-      let extractedPlate = detectedPlate || '';
-      if (!extractedPlate) {
-        try {
-          const parsed = JSON.parse(rawText);
-          if (parsed.plate_number) extractedPlate = String(parsed.plate_number);
-        } catch {
-          // ignore
+      // Extract exact raw plate as encoded in QR JSON first (preserving formatting like AA-00215)
+      let extractedPlate = '';
+      try {
+        const parsed = JSON.parse(rawText);
+        if (parsed.plate_number || parsed.plateNumber) {
+          extractedPlate = String(parsed.plate_number || parsed.plateNumber);
         }
+      } catch {
+        // ignore non-JSON
+      }
+      if (!extractedPlate && detectedPlate) {
+        extractedPlate = detectedPlate;
       }
       if (extractedPlate) {
         setPlateNumber(extractedPlate);
