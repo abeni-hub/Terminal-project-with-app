@@ -233,17 +233,49 @@ async def gate_decision(payload: Dict[str, Any] = Body(...)):
     direction = GateDirection.ENTRY if direction_str == "ENTRY" else GateDirection.EXIT
     camera_id = payload.get("cameraId", "CAM-01")
 
-    # If QR data provided, evaluate with full lifecycle repository first
+    # If QR data provided, route according to pass registration status
     if qr_data:
-        decision = global_qr_manager.verify_and_consume_gate_pass(
-            raw_qr_input=str(qr_data),
-            detected_plate=plate,
-            detected_confidence=conf,
-            direction=direction,
-            gate_id=camera_id,
-        )
-        # Mirror to gate flow audit logger for consistency
-        global_gate_flow.audit_logger.log_access(decision)
+        clean_qr = str(qr_data).strip()
+        pass_id_candidate = ""
+        try:
+            parsed = json.loads(clean_qr)
+            pass_id_candidate = parsed.get("pass_id") or parsed.get("ticket_id") or ""
+        except Exception:
+            if "|" in clean_qr:
+                pass_id_candidate = clean_qr.split("|")[0]
+            elif ":" in clean_qr:
+                pass_id_candidate = clean_qr.split(":")[0]
+
+        has_repo_pass = bool(global_qr_repo.get_pass(pass_id_candidate)) if pass_id_candidate else False
+
+        # If registered pass in DB or HMAC signed payload, verify against lifecycle repository
+        if has_repo_pass or "sig" in clean_qr or "signature" in clean_qr:
+            decision = global_qr_manager.verify_and_consume_gate_pass(
+                raw_qr_input=clean_qr,
+                detected_plate=plate,
+                detected_confidence=conf,
+                direction=direction,
+                gate_id=camera_id,
+            )
+            try:
+                audit_id = global_gate_flow.audit_logger.log_event(
+                    decision=decision,
+                    camera_id=camera_id,
+                    qr_plate=decision.plate_number,
+                    raw_qr_text=clean_qr,
+                )
+                decision.audit_id = audit_id
+            except Exception as e:
+                logger.warning(f"Could not mirror decision to audit logger: {e}")
+        else:
+            # Presentation presets, simulation tickets, or ad-hoc visitor passes evaluated directly by GateFlowManager
+            decision = global_gate_flow.evaluate_gate_access(
+                ocr_plate=plate,
+                ocr_confidence=conf,
+                qr_input=clean_qr,
+                direction=direction,
+                camera_id=camera_id,
+            )
     else:
         decision = global_gate_flow.evaluate_gate_access(
             ocr_plate=plate,

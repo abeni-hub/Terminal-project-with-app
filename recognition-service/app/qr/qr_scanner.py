@@ -870,6 +870,25 @@ class GateAuditLogger:
             conn.commit()
             return int(cursor.lastrowid)
 
+    def log_access(
+        self,
+        decision: GateDecision,
+        camera_id: str = "CAM-01",
+        qr_plate: Optional[str] = None,
+        account_id: Optional[str] = None,
+        raw_qr_text: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Alias for log_event to guarantee full backward compatibility."""
+        return self.log_event(
+            decision=decision,
+            camera_id=camera_id,
+            qr_plate=qr_plate,
+            account_id=account_id,
+            raw_qr_text=raw_qr_text,
+            metadata=metadata,
+        )
+
     def get_recent_logs(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Retrieves recent audit log events."""
         with self._get_connection() as conn:

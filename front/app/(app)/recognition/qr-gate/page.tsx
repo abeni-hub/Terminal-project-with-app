@@ -235,7 +235,7 @@ export default function QRGateScannerPage() {
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson.detail || 'Failed to evaluate gate decision');
+        throw new Error(errJson.detail || `Server returned error (${res.status}: ${res.statusText || 'Internal Error'})`);
       }
 
       const decision: GateDecisionResponse = await res.json();
