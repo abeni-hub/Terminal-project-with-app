@@ -610,7 +610,7 @@ export class RecognitionService {
 
     // CASE 1: Vehicle Assigned OR Verified QR Gate Pass (Auto-queue to Incoming Pending with isViolation=false)
     if (activeAssignments.length > 0 || isQrCameraPass) {
-      let assignment = activeAssignments[0];
+      let assignment: any = activeAssignments[0] || null;
       if (!assignment) {
         assignment =
           (await this.prisma.weeklyAssignment.findFirst({
