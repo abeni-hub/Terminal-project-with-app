@@ -17,7 +17,9 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from fastapi import FastAPI, HTTPException, Response, BackgroundTasks, File, UploadFile, Body, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import base64
@@ -40,10 +42,44 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 logger = logging.getLogger("RecognitionService")
 
 app = FastAPI(
-    title="Addis Ababa Transport Office - High-FPS ANPR Recognition Service",
-    version="2.0.0",
-    description="Production High-FPS ANPR microservice with Plate Eligibility & Unknown Vehicle Categorization.",
+    title="Addis Ababa Transport Office - High-FPS ANPR & QR Gateway API",
+    version="2.1.0",
+    description="Production High-FPS ANPR, QR Pass Lifecycle, Live Camera Control & Gate Clearance API.",
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
 )
+
+def _resolve_gateway_prefix(request: Request) -> str:
+    prefix = request.headers.get("x-forwarded-prefix", "").rstrip("/")
+    if not prefix:
+        host = request.headers.get("host", "")
+        referer = request.headers.get("referer", "")
+        if "/recognition-api" in referer or ":8080" in host:
+            prefix = "/recognition-api"
+    return prefix
+
+@app.get("/openapi.json", include_in_schema=False)
+@app.get("/docs/openapi.json", include_in_schema=False)
+def custom_openapi_json(request: Request):
+    prefix = _resolve_gateway_prefix(request)
+    schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+    )
+    schema["servers"] = [{"url": prefix or "/"}]
+    return JSONResponse(schema)
+
+@app.get("/docs", include_in_schema=False)
+def custom_swagger_ui(request: Request):
+    prefix = _resolve_gateway_prefix(request)
+    openapi_target = f"{prefix}/openapi.json" if prefix else "openapi.json"
+    return get_swagger_ui_html(
+        openapi_url=openapi_target,
+        title=f"{app.title} - Swagger UI",
+    )
 
 app.add_middleware(
     CORSMiddleware,

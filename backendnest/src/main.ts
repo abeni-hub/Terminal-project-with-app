@@ -7,12 +7,17 @@ import { AppModule } from './app.module';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Security
-  app.use(helmet());
+  // Security (disable CSP/COOP upgrade-insecure-requests so HTTP Swagger UI on :8080 loads cleanly)
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginOpenerPolicy: false,
+    }),
+  );
 
-  // CORS – allow the Next.js frontend to connect
+  // CORS – allow Next.js, Mobile clients, and Swagger UI on gateway port
   app.enableCors({
-    origin: ['http://localhost:3000', 'http://localhost:3001'],
+    origin: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true,
@@ -36,8 +41,12 @@ async function bootstrap() {
     .setTitle('Addis Ababa Transport Office – Terminal Roster API')
     .setDescription('Enterprise backend for the Terminal Digital Roster System')
     .setVersion('1.0.0')
+    .addServer('/')
     .addBearerAuth()
     .addTag('Authentication')
+    .addTag('Recognition')
+    .addTag('Cameras')
+    .addTag('Journey')
     .addTag('RBAC - Roles & Permissions')
     .addTag('User Management')
     .addTag('Terminal Management')
